@@ -2,7 +2,7 @@
 
 A standalone PlatformIO/Arduino firmware project for the **M5Stack CoreInk**.
 
-This project is intentionally separate from Trail Mate. It targets only the CoreInk hardware and focuses on a polished monochrome e-paper UI with button navigation, battery-friendly refresh behavior, and simple device status pages.
+This project targets the CoreInk hardware and focuses on a polished monochrome e-paper UI with button navigation, battery-friendly refresh behavior, and simple device status pages.
 
 ## Hardware
 
