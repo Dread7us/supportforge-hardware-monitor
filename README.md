@@ -6,8 +6,7 @@ This project targets the CoreInk hardware and focuses on a polished monochrome e
 
 ## Hardware
 
-- M5Stack CoreInk
-- ESP32
+- M5Stack CoreInk (ESP32)
 - 200 × 200 monochrome e-paper display
 - CoreInk front/side buttons
 - Built-in battery/PMIC support exposed by the M5Core-Ink library
@@ -31,124 +30,127 @@ m5-coreink-ui/
     display.cpp
     ui_pages.h
     ui_pages.cpp
-```
+Configuration & Environment Setup
+To keep your personal network credentials, server endpoints, and location coordinates completely secure and out of version control, this project uses a detached local configuration file.
 
-## Build
+1. Configure Local Secrets
+Create a file named secrets.h inside the src/ directory. Copy the template below and update the values with your local network infrastructure, target telemetry endpoints, and local coordinates:
 
+C++
+#ifndef SECRETS_H
+#define SECRETS_H
+
+// Local Network Credentials
+#ifndef COREINK_WIFI_SSID
+#define COREINK_WIFI_SSID "YOUR_WIFI_SSID"
+#endif
+
+#ifndef COREINK_WIFI_PASSWORD
+#define COREINK_WIFI_PASSWORD "YOUR_WIFI_PASSWORD"
+#endif
+
+// Telemetry Host API Configuration
+#ifndef COREINK_BASEMENT_STATUS_URL
+#define COREINK_BASEMENT_STATUS_URL "http://YOUR_SERVER_IP:PORT/api/v1/telemetry"
+#endif
+
+#ifndef COREINK_BEELINK_LHM_URL
+#define COREINK_BEELINK_LHM_URL COREINK_BASEMENT_STATUS_URL
+#endif
+
+// Application Authentication Token
+#ifndef SUPPORTFORGE_AUTH_TOKEN
+#define SUPPORTFORGE_AUTH_TOKEN "YOUR_SECURE_AUTH_TOKEN"
+#endif
+
+// Geographic Fallbacks for Weather Services
+#ifndef WEATHER_LAT
+#define WEATHER_LAT 0.0000 
+#endif
+
+#ifndef WEATHER_LON
+#define WEATHER_LON 0.0000
+#endif
+
+#ifndef WEATHER_CITY_NAME
+#define WEATHER_CITY_NAME "Your City, Region"
+#endif
+
+#endif // SECRETS_H
+2. Verify Version Control Safety
+Ensure your root .gitignore file contains a dedicated rule for src/secrets.h to prevent accidental commits of your private configuration data.
+
+Build
 Open this folder directly in VS Code or PlatformIO, then build the default environment:
 
-```cmd
+DOS
 pio run
-```
+Wi-Fi and Internet Time
+On power-up the CoreInk starts Wi-Fi, configures SNTP with pool.ntp.org, and syncs the ESP32/CoreInk RTC when internet time becomes available. To keep the device responsive and battery-friendly, time sync is intentionally incremental:
 
-## Wi-Fi and Internet Time
+It retries every 30 seconds until the first successful NTP sync.
 
-This firmware is preconfigured for the IoT network:
+After a successful sync, it checks about every 6 hours.
 
-- SSID: `TP-Link_IoT`
-- Password: `internet1`
+Pressing the middle/select button forces an immediate Wi-Fi scan, NTP sync attempt, and a manual telemetry fetch from the monitoring host.
 
-On power-up the CoreInk starts Wi-Fi, configures SNTP with `pool.ntp.org`, and syncs the ESP32/CoreInk RTC when internet time becomes available. To keep the device responsive and battery-friendly, time sync is intentionally incremental:
+Timezone defaults to Pacific time via COREINK_TZ in include/app_config.h:
 
-- It retries every **30 seconds** until the first successful NTP sync.
-- After a successful sync, it checks about every **6 hours**.
-- Pressing the **middle/select** button forces an immediate Wi-Fi scan, NTP sync attempt, and Beelink fetch.
-
-Timezone defaults to Pacific time via `COREINK_TZ` in `include/app_config.h`:
-
-```cpp
+C++
 PST8PDT,M3.2.0,M11.1.0
-```
+You can still override Wi-Fi, password, NTP server, timezone, or server endpoints globally from PlatformIO build_flags within your platformio.ini file if needed.
 
-You can still override Wi-Fi, password, NTP server, timezone, or Beelink endpoint from PlatformIO `build_flags` if needed.
+Boot Splash and E-paper Refresh
+At startup the device performs a true full-screen e-paper clean, then shows a bordered COREINK UI splash screen while Wi-Fi and clock services initialize. This addresses the traditional e-paper boot artifact where only a fractional segment of the display updates on initial power-up.
 
-## Boot Splash and E-paper Refresh
+Device Status Bar
+The top status bar provides system status at a glance:
 
-At startup the device now performs a true full-screen e-paper clean, then shows a bordered **COREINK UI** splash screen while Wi-Fi and clock services initialize. This is intended to fix the previous boot artifact where only a tiny quarter of the display appeared at the bottom and the rest of the panel stayed dark until buttons were pressed.
+Local time parsed from SNTP when Wi-Fi is available, falling back automatically to the CoreInk BM8563 RTC hardware module.
 
-## Device Status Bar
+CoreInk battery gauge rendered as a responsive icon + percentage, using the factory-calibrated ADC path on GPIO 35.
 
-The top bar now shows:
+Wi-Fi signal strength bars computed directly from the active station connection RSSI metrics.
 
-- Local time from SNTP when Wi-Fi is available, falling back to the CoreInk BM8563 RTC reading.
-- The CoreInk battery as an icon plus percentage, using the factory-test ADC path on GPIO 35.
-- Wi-Fi signal strength bars from the CoreInk ESP32 station connection.
-- A Bluetooth capability icon when ESP32 Bluetooth support is compiled in.
+A Bluetooth capability icon indicating when ESP32 BLE support layers are compiled into the firmware.
 
-## Functional Pages
+Functional Pages
+The interface handles multi-page navigation across several distinct diagnostic arrays:
 
-The CoreInk UI now cycles through functional pages instead of placeholders:
+Dashboard: Large digital clock display, localized weather data string, and critical device health badges.
 
-- **Dashboard**: large clock, weather status, and device health badges.
-- **Clock**: large `HH:MM`, date, and clear `NTP` / `RTC` / `NO TIME` source label.
-- **Power**: hardware ADC battery gauge, raw ADC, calibrated ADC mV, pack voltage, and battery health state.
-- **Network**: Wi-Fi configured/connected state, SSID, IP, RSSI, signal bars, scan count, and Bluetooth capability.
-- **Beelink**: Libre Hardware Monitor online/offline state, CPU/memory/disk metrics, and latest endpoint error/summary.
-- **System**: firmware, heap, uptime, wireless, Bluetooth, and battery diagnostics.
+Clock: High-contrast HH:MM layout, full calendar date, and an active time source label (NTP, RTC, or NO TIME).
 
-The middle/select button forces a Wi-Fi scan and Beelink fetch. Serial monitor now prints `BAT`, `WIFI`, `TIME`, and `BEELINK` diagnostic lines so hardware issues are visible immediately after flashing.
+Power: Hardware ADC metrics, real-time millivolt readings, pack voltage calculations, and automated battery health diagnostics.
 
-## Wi-Fi and Beelink Libre Hardware Monitor Status
+Network: Wi-Fi connection states, active SSID parameters, local IP assignment, current RSSI readings, total scanned networks, and BLE compile states.
 
-Default Wi-Fi credentials are set in `include/app_config.h` for `TP-Link_IoT`. Configure the optional basement Beelink status endpoint with PlatformIO build flags. If you override credentials, keep secrets out of git by putting these in a local untracked environment override or editing them only on your machine:
+Server Telemetry: Live metrics fetched from the host server tracking CPU load, RAM usage, storage allocations, and detailed API request summaries.
 
-```ini
-build_flags =
-    -std=gnu++17
-    -DCORE_DEBUG_LEVEL=0
-    -DCOREINK_WIFI_SSID=\"TP-Link_IoT\"
-    -DCOREINK_WIFI_PASSWORD=\"internet1\"
-    -DCOREINK_BEELINK_LHM_URL=\"http://192.168.0.123:8085/data.json\"
-    -DCOREINK_NTP_SERVER=\"pool.ntp.org\"
-    -DCOREINK_TZ=\"PST8PDT,M3.2.0,M11.1.0\"
-```
+System: Detailed diagnostics covering active firmware versioning, heap memory allocation, system uptime counters, and wireless stack performance.
 
-The firmware fetches `COREINK_BEELINK_LHM_URL` about every 30 seconds and expects the nested Libre Hardware Monitor `data.json` tree from port `8085`. It recursively extracts `CPU Total`, memory load, and storage used-space percentages for C: and D: drives.
+Hardware Diagnostics
+To view low-level telemetry logs, launch the PlatformIO serial monitor immediately after flashing:
 
-When the Beelink HTTP request fails, times out, returns non-200, or the Libre Hardware Monitor metrics are missing, the Beelink page remains OFFLINE and the CoreInk speaker pulses until the top/UP button dismisses the alarm. The server status remains OFFLINE for the UI even after the alarm is muted. A successful later fetch returns the state to ONLINE and automatically arms the alarm for the next failure.
-
-## Hardware Diagnostics
-
-After uploading, open the serial monitor:
-
-```cmd
+DOS
 pio device monitor -b 115200
-```
+The system streams standardized debugging blocks to help you monitor runtime processes and tune hardware configurations:
 
-Look for lines like:
-
-```text
+Plaintext
 BAT raw=1840 adc_mv=1610 pack=3.96 pct=72 state=3
 WIFI connected=1 ssid=YourWifi ip=192.168.1.50 rssi=-58 scan_count=12
 TIME synced RTC from NTP: 2026-07-16 20:11
-BEELINK ok: online=1 cpu=18% mem=42% disk=61% summary=Stack OK
-```
+TELEMETRY ok: online=1 cpu=18% mem=42% disk=61% summary=Stack OK
+Upload
+Connect the CoreInk over USB and execute the build pipeline:
 
-If the battery still reads wrong, the `BAT raw` and `adc_mv` values are the key hardware facts needed to tune the divider/calibration for your exact CoreInk revision.
-
-## Upload
-
-Connect the CoreInk over USB and run:
-
-```cmd
+DOS
 pio run -t upload
-```
+UI Controls
+Front/PWR button: Cycles to the next functional page; also handles power state wakeups.
 
-## Serial Monitor
+Top/UP button: Reverses navigation to the previous page.
 
-```cmd
-pio device monitor -b 115200
-```
+Middle/MID button: Forces a full hardware refresh. Instantly reinitializes Wi-Fi configurations, scans adjacent cells, synchronizes the hardware RTC via NTP, and pulls fresh system payloads from the host endpoint.
 
-## UI Controls
-
-- **Front/PWR button**: next page; also wakes/navigates away from the sleep page.
-- **Top/UP button**: previous page.
-- **Middle/MID button**: force refresh. This immediately rechecks Wi-Fi, rescans nearby networks, tries an NTP time sync, and fetches the Beelink Libre Hardware Monitor endpoint if configured.
-- **Bottom/DOWN button**: sleep/static page to reduce refresh activity.
-
-The exact physical mapping can be adjusted in `src/buttons.cpp` if a CoreInk hardware revision reports different button names.
-
-## E-paper UI Notes
-
-The firmware avoids continuous animation. It refreshes when page content changes, on a periodic status update, or when the user presses a button. A full clear is performed periodically to reduce ghosting.
+Bottom/DOWN button: Drops the device into a low-refresh static sleep view to conserve power.
