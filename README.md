@@ -29,7 +29,8 @@ m5-coreink-ui/
     display.h
     display.cpp
     ui_pages.h
-    ui_pages.cpp
+    ui_pages.cpp```
+
 Configuration & Environment Setup
 To keep your personal network credentials, server endpoints, and location coordinates completely secure and out of version control, this project uses a detached local configuration file.
 
