@@ -1,0 +1,78 @@
+********************************************************************************
+Obsolete PIO Core v6.1.18 is used (previous was 6.1.19)
+Please remove multiple PIO Cores from a system:
+https://docs.platformio.org/en/latest/core/installation/troubleshooting.html
+********************************************************************************
+Processing m5stack-coreink (platform: espressif32@6.10.0; board: m5stack-core-esp32; framework: arduino)
+--------------------------------------------------------------------------------
+Verbose mode can be enabled via `-v, --verbose` option
+CONFIGURATION: https://docs.platformio.org/page/boards/espressif32/m5stack-core-esp32.html
+PLATFORM: Espressif 32 (6.10.0) > M5Stack Core ESP32
+HARDWARE: ESP32 240MHz, 320KB RAM, 4MB Flash
+DEBUG: Current (cmsis-dap) External (cmsis-dap, esp-bridge, esp-prog, iot-bus-jtag, jlink, minimodule, olimex-arm-usb-ocd, olimex-arm-usb-ocd-h, olimex-arm-usb-tiny-h, olimex-jtag-tiny, tumpa)
+PACKAGES: 
+ - framework-arduinoespressif32 @ 3.20017.241212+sha.dcc1105b 
+ - tool-esptoolpy @ 1.40501.0 (4.5.1) 
+ - toolchain-xtensa-esp32 @ 8.4.0+2021r2-patch5
+LDF: Library Dependency Finder -> https://bit.ly/configure-pio-ldf
+LDF Modes: Finder ~ chain, Compatibility ~ soft
+Found 34 compatible libraries
+Scanning dependencies...
+Dependency Graph
+|-- M5Core-Ink @ 0.0.7
+Building in release mode
+Compiling .pio\build\m5stack-coreink\src\app_state.cpp.o
+Compiling .pio\build\m5stack-coreink\src\display.cpp.o
+Compiling .pio\build\m5stack-coreink\src\main.cpp.o
+Compiling .pio\build\m5stack-coreink\src\ui_pages.cpp.o
+Archiving .pio\build\m5stack-coreink\lib37d\libWire.a
+Archiving .pio\build\m5stack-coreink\liba42\libSPI.a
+Archiving .pio\build\m5stack-coreink\libb76\libM5Core-Ink.a
+Compiling .pio\build\m5stack-coreink\FrameworkArduino\Tone.cpp.o
+Compiling .pio\build\m5stack-coreink\FrameworkArduino\USB.cpp.o
+Compiling .pio\build\m5stack-coreink\FrameworkArduino\USBCDC.cpp.o
+Compiling .pio\build\m5stack-coreink\FrameworkArduino\USBMSC.cpp.o
+Compiling .pio\build\m5stack-coreink\FrameworkArduino\WMath.cpp.o
+Compiling .pio\build\m5stack-coreink\FrameworkArduino\WString.cpp.o
+Compiling .pio\build\m5stack-coreink\FrameworkArduino\base64.cpp.o
+Compiling .pio\build\m5stack-coreink\FrameworkArduino\cbuf.cpp.o
+Compiling .pio\build\m5stack-coreink\FrameworkArduino\esp32-hal-adc.c.o
+Compiling .pio\build\m5stack-coreink\FrameworkArduino\esp32-hal-bt.c.o
+Compiling .pio\build\m5stack-coreink\FrameworkArduino\esp32-hal-cpu.c.o
+Compiling .pio\build\m5stack-coreink\FrameworkArduino\esp32-hal-dac.c.o
+Compiling .pio\build\m5stack-coreink\FrameworkArduino\esp32-hal-gpio.c.o
+Compiling .pio\build\m5stack-coreink\FrameworkArduino\esp32-hal-i2c-slave.c.o
+Compiling .pio\build\m5stack-coreink\FrameworkArduino\esp32-hal-i2c.c.o
+Compiling .pio\build\m5stack-coreink\FrameworkArduino\esp32-hal-ledc.c.o
+Compiling .pio\build\m5stack-coreink\FrameworkArduino\esp32-hal-matrix.c.o
+Compiling .pio\build\m5stack-coreink\FrameworkArduino\esp32-hal-misc.c.o
+Compiling .pio\build\m5stack-coreink\FrameworkArduino\esp32-hal-psram.c.o
+Compiling .pio\build\m5stack-coreink\FrameworkArduino\esp32-hal-rgb-led.c.o
+Compiling .pio\build\m5stack-coreink\FrameworkArduino\esp32-hal-rmt.c.o
+Compiling .pio\build\m5stack-coreink\FrameworkArduino\esp32-hal-sigmadelta.c.o
+Compiling .pio\build\m5stack-coreink\FrameworkArduino\esp32-hal-spi.c.o
+Compiling .pio\build\m5stack-coreink\FrameworkArduino\esp32-hal-time.c.o
+Compiling .pio\build\m5stack-coreink\FrameworkArduino\esp32-hal-timer.c.o
+Compiling .pio\build\m5stack-coreink\FrameworkArduino\esp32-hal-tinyusb.c.o
+Compiling .pio\build\m5stack-coreink\FrameworkArduino\esp32-hal-touch.c.o
+Compiling .pio\build\m5stack-coreink\FrameworkArduino\esp32-hal-uart.c.o
+Compiling .pio\build\m5stack-coreink\FrameworkArduino\firmware_msc_fat.c.o
+Compiling .pio\build\m5stack-coreink\FrameworkArduino\libb64\cdecode.c.o
+Compiling .pio\build\m5stack-coreink\FrameworkArduino\libb64\cencode.c.o
+Compiling .pio\build\m5stack-coreink\FrameworkArduino\main.cpp.o
+Compiling .pio\build\m5stack-coreink\FrameworkArduino\stdlib_noniso.c.o
+Compiling .pio\build\m5stack-coreink\FrameworkArduino\wiring_pulse.c.o
+Compiling .pio\build\m5stack-coreink\FrameworkArduino\wiring_shift.c.o
+Archiving .pio\build\m5stack-coreink\libFrameworkArduino.a
+Linking .pio\build\m5stack-coreink\firmware.elf
+Retrieving maximum program size .pio\build\m5stack-coreink\firmware.elf
+Checking size .pio\build\m5stack-coreink\firmware.elf
+Advanced Memory Usage is available via "PlatformIO Home > Project Inspect"
+RAM:   [=         ]   6.8% (used 22320 bytes from 327680 bytes)
+Flash: [==        ]  23.7% (used 311193 bytes from 1310720 bytes)
+Building .pio\build\m5stack-coreink\firmware.bin
+esptool.py v4.5.1
+Creating esp32 image...
+Merged 2 ELF sections
+Successfully created esp32 image.
+========================= [SUCCESS] Took 10.72 seconds =========================
