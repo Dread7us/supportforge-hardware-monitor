@@ -1,17 +1,32 @@
-# M5 CoreInk UI
+# 📟 M5 CoreInk UI
 
-A standalone PlatformIO/Arduino firmware project for the **M5Stack CoreInk**.
+![PlatformIO](https://img.shields.io/badge/PlatformIO-orange?style=flat&logo=PlatformIO)
+![C++](https://img.shields.io/badge/C%2B%2B-00599C?style=flat&logo=c%2B%2B)
+![ESP32](https://img.shields.io/badge/ESP32-Hardware-blue?style=flat)
 
-This project targets the CoreInk hardware and focuses on a polished monochrome e-paper UI with button navigation, battery-friendly refresh behavior, and simple device status pages.
+> A standalone PlatformIO/Arduino firmware project for the **M5Stack CoreInk**. 
+> Focuses on a polished monochrome e-paper UI with button navigation, battery-friendly refresh behavior, and dynamic device status pages.
 
-## Hardware
+---
 
-- M5Stack CoreInk (ESP32)
-- 200 × 200 monochrome e-paper display
-- CoreInk front/side buttons
-- Built-in battery/PMIC support exposed by the M5Core-Ink library
+## 📸 Screenshots
+*(Coming Soon)*
+<!-- You can drop your image links here later: 
+| Dashboard | Network | Server Telemetry |
+| :---: | :---: | :---: |
+| <img src="link_to_image_1" width="200"> | <img src="link_to_image_2" width="200"> | <img src="link_to_image_3" width="200"> |
+-->
 
-## Project Structure
+---
+
+## 🧰 Hardware
+
+- **M5Stack CoreInk** (ESP32)
+- **Display:** 200 × 200 monochrome e-paper (SPI)
+- **Controls:** CoreInk front/side multi-function buttons
+- **Power:** Built-in battery/PMIC support exposed by the `M5Core-Ink` library
+
+## 📂 Project Structure
 
 ```text
 m5-coreink-ui/
@@ -32,7 +47,7 @@ m5-coreink-ui/
     ui_pages.cpp
 ```
 
-## Configuration & Environment Setup
+## 🔒 Configuration & Environment Setup
 
 To keep your personal network credentials, server endpoints, and location coordinates completely secure and out of version control, this project uses a detached local configuration file. 
 
@@ -87,55 +102,74 @@ Create a file named `secrets.h` inside the `src/` directory. Copy the template b
 
 Ensure your root `.gitignore` file contains a dedicated rule for `src/secrets.h` to prevent accidental commits of your private configuration data.
 
-## Build
+---
+
+## 🚀 Build & Upload
 
 Open this folder directly in VS Code or PlatformIO, then build the default environment:
 
 ```cmd
 pio run
 ```
+To build and push the firmware to the device over USB:
+```cmd
+pio run -t upload
+```
 
-## Wi-Fi and Internet Time
+---
+
+## 🌐 Wi-Fi and Internet Time
 
 On power-up the CoreInk starts Wi-Fi, configures SNTP with `pool.ntp.org`, and syncs the ESP32/CoreInk RTC when internet time becomes available. To keep the device responsive and battery-friendly, time sync is intentionally incremental:
 
-- It retries every **30 seconds** until the first successful NTP sync.
-- After a successful sync, it checks about every **6 hours**.
-- Pressing the **middle/select** button forces an immediate Wi-Fi scan, NTP sync attempt, and a manual telemetry fetch from the monitoring host.
+- 🔄 Retries every **30 seconds** until the first successful NTP sync.
+- ⏳ After a successful sync, it checks about every **6 hours**.
+- 🔘 Pressing the **middle/select** button forces an immediate Wi-Fi scan, NTP sync attempt, and a manual telemetry fetch from the monitoring host.
 
 Timezone defaults to Pacific time via `COREINK_TZ` in `include/app_config.h`:
-
 ```cpp
 PST8PDT,M3.2.0,M11.1.0
 ```
+*(You can override Wi-Fi, passwords, NTP servers, timezones, or server endpoints globally via PlatformIO `build_flags` in `platformio.ini`)*
 
-You can still override Wi-Fi, password, NTP server, timezone, or server endpoints globally from PlatformIO `build_flags` within your `platformio.ini` file if needed.
+---
 
-## Boot Splash and E-paper Refresh
+## 🎨 UI & Rendering Architecture
 
-At startup the device performs a true full-screen e-paper clean, then shows a bordered **COREINK UI** splash screen while Wi-Fi and clock services initialize. This addresses the traditional e-paper boot artifact where only a fractional segment of the display updates on initial power-up.
+### Boot Splash and E-paper Refresh
+At startup, the device performs a true full-screen e-paper clean, then shows a bordered **COREINK UI** splash screen while Wi-Fi and clock services initialize. This eliminates the traditional e-paper boot artifact where only a fractional segment of the display updates on initial power-up.
 
-## Device Status Bar
-
+### Device Status Bar
 The top status bar provides system status at a glance:
+- **Time:** Parsed from SNTP when Wi-Fi is available, falling back to the CoreInk BM8563 RTC.
+- **Battery:** Responsive gauge icon + percentage, using the factory-calibrated ADC path (GPIO 35).
+- **Wi-Fi:** Signal strength bars computed directly from the active station connection RSSI metrics.
+- **Bluetooth:** Capability icon indicating when ESP32 BLE support layers are active.
 
-- Local time parsed from SNTP when Wi-Fi is available, falling back automatically to the CoreInk BM8563 RTC hardware module.
-- CoreInk battery gauge rendered as a responsive icon + percentage, using the factory-calibrated ADC path on GPIO 35.
-- Wi-Fi signal strength bars computed directly from the active station connection RSSI metrics.
-- A Bluetooth capability icon indicating when ESP32 BLE support layers are compiled into the firmware.
-
-## Functional Pages
-
+### 📑 Functional Pages
 The interface handles multi-page navigation across several distinct diagnostic arrays:
 
-- **Dashboard**: Large digital clock display, localized weather data string, and critical device health badges.
-- **Clock**: High-contrast `HH:MM` layout, full calendar date, and an active time source label (`NTP`, `RTC`, or `NO TIME`).
-- **Power**: Hardware ADC metrics, real-time millivolt readings, pack voltage calculations, and automated battery health diagnostics.
-- **Network**: Wi-Fi connection states, active SSID parameters, local IP assignment, current RSSI readings, total scanned networks, and BLE compile states.
-- **Server Telemetry**: Live metrics fetched from the host server tracking CPU load, RAM usage, storage allocations, and detailed API request summaries.
-- **System**: Detailed diagnostics covering active firmware versioning, heap memory allocation, system uptime counters, and wireless stack performance.
+- 🏠 **Dashboard**: Large digital clock display, localized weather data, and critical device health badges.
+- 🕒 **Clock**: High-contrast `HH:MM` layout, full calendar date, and active time source label (`NTP`, `RTC`, or `NO TIME`).
+- 🔋 **Power**: Hardware ADC metrics, real-time millivolt readings, pack voltage, and automated battery health diagnostics.
+- 📶 **Network**: Wi-Fi states, active SSID, local IP, RSSI readings, scanned network count, and BLE compile states.
+- 🖥️ **Server Telemetry**: Live metrics fetched from the host server tracking CPU load, RAM usage, storage allocations, and API request summaries.
+- ⚙️ **System**: Firmware versioning, heap memory allocation, system uptime counters, and wireless stack performance.
 
-## Hardware Diagnostics
+---
+
+## 🕹️ UI Controls
+
+| Button | Action |
+| :--- | :--- |
+| **Front / PWR** | Cycles to the next functional page; wakes device from sleep state. |
+| **Top / UP** | Reverses navigation to the previous page. |
+| **Middle / MID** | Forces a full hardware refresh. Reinitializes Wi-Fi, scans cells, syncs NTP, and pulls fresh telemetry. |
+| **Bottom / DOWN** | Drops the device into a low-refresh static sleep view to conserve power. |
+
+---
+
+## 🩺 Hardware Diagnostics
 
 To view low-level telemetry logs, launch the PlatformIO serial monitor immediately after flashing:
 
@@ -151,18 +185,3 @@ WIFI connected=1 ssid=YourWifi ip=192.168.1.50 rssi=-58 scan_count=12
 TIME synced RTC from NTP: 2026-07-16 20:11
 TELEMETRY ok: online=1 cpu=18% mem=42% disk=61% summary=Stack OK
 ```
-
-## Upload
-
-Connect the CoreInk over USB and execute the build pipeline:
-
-```cmd
-pio run -t upload
-```
-
-## UI Controls
-
-- **Front/PWR button**: Cycles to the next functional page; also handles power state wakeups.
-- **Top/UP button**: Reverses navigation to the previous page.
-- **Middle/MID button**: Forces a full hardware refresh. Instantly reinitializes Wi-Fi configurations, scans adjacent cells, synchronizes the hardware RTC via NTP, and pulls fresh system payloads from the host endpoint.
-- **Bottom/DOWN button**: Drops the device into a low-refresh static sleep view to conserve power.
