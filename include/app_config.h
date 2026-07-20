@@ -6,8 +6,12 @@
 namespace app_config
 {
 
-constexpr const char* kAppName = "supportFORGE Monitor";
-constexpr const char* kVersion = "1.0.0";
+constexpr const char* kAppName = "supportFORGE";
+constexpr const char* kVersion = "1.0.1";
+
+#ifndef COREINK_TARGET_HOST_NAME
+#define COREINK_TARGET_HOST_NAME "Host"
+#endif
 
 #ifndef COREINK_NTP_SERVER
 #define COREINK_NTP_SERVER "pool.ntp.org"
@@ -21,6 +25,7 @@ constexpr const char* kWifiSsid = COREINK_WIFI_SSID;
 constexpr const char* kWifiPassword = COREINK_WIFI_PASSWORD;
 constexpr const char* kBasementStatusUrl = COREINK_BASEMENT_STATUS_URL;
 constexpr const char* kBeelinkLhmUrl = COREINK_BEELINK_LHM_URL;
+constexpr const char* kTargetHostName = COREINK_TARGET_HOST_NAME;
 constexpr const char* kNtpServer = COREINK_NTP_SERVER;
 constexpr const char* kTimezone = COREINK_TZ;
 constexpr const char* kAuthToken = SUPPORTFORGE_AUTH_TOKEN;
@@ -33,6 +38,7 @@ constexpr uint16_t kScreenWidth = 200;
 constexpr uint16_t kScreenHeight = 200;
 
 constexpr uint32_t kDashboardRefreshMs = 60'000;
+constexpr uint32_t kDefaultRefreshIntervalMs = 60'000;
 constexpr uint32_t kClockRefreshMs = 1'000;
 constexpr uint32_t kSystemRefreshMs = 5'000;
 constexpr uint32_t kNetworkRefreshMs = 30'000;

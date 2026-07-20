@@ -84,6 +84,7 @@ struct WeatherStatus
     int http_code = 0;
     uint32_t last_attempt_ms = 0;
     uint32_t last_success_ms = 0;
+    float temperature_c = 0.0f;
     float temperature_f = 0.0f;
     int weather_code = -1;
     char condition[18] = "WAITING";
@@ -167,8 +168,9 @@ class AppState
     void updateServerAlarm();
     void toggleTempUnit();
     bool tempIsF() const { return temp_is_f; }
+    void cycleRefreshInterval();
     bool consumeBatteryDisplayChanged();
-    bool chargeAnimState() const { return charge_anim_state_; }
+    uint8_t chargeAnimPhase() const { return charge_anim_phase_; }
     bool consumeChargeAnimDisplayChanged();
 
     bool shouldFullClear() const;
@@ -186,6 +188,7 @@ class AppState
     void noteBasementFailure(const char* error, int http_code = 0);
     void setBasementOnline();
     void updateBeelinkTempFormats();
+    uint32_t sanitizeRefreshInterval(uint32_t interval_ms) const;
     void syncRtcFromSystemTime(const tm& timeinfo);
 
     Page page_ = Page::Dashboard;
@@ -198,7 +201,7 @@ class AppState
     bool last_charging_ = false;
     bool has_battery_display_sample_ = false;
     bool battery_display_changed_ = false;
-    bool charge_anim_state_ = false;
+    uint8_t charge_anim_phase_ = 0;
     bool charge_anim_display_changed_ = false;
     unsigned long last_anim_toggle_ = 0;
     uint32_t last_status_update_ms_ = 0;

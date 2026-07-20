@@ -106,22 +106,7 @@ void handleBeelinkButton(ButtonEvent event)
         }
         else if (basement.beelink_cursor == 4)
         {
-            if (app.refresh_interval_ms == 15000U)
-            {
-                app.refresh_interval_ms = 30000U;
-            }
-            else if (app.refresh_interval_ms == 30000U)
-            {
-                app.refresh_interval_ms = 60000U;
-            }
-            else if (app.refresh_interval_ms == 60000U)
-            {
-                app.refresh_interval_ms = 300000U;
-            }
-            else
-            {
-                app.refresh_interval_ms = 15000U;
-            }
+            app.cycleRefreshInterval();
             force_full_clear = false;
         }
         else

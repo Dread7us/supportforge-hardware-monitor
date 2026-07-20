@@ -16,6 +16,13 @@ constexpr int kBatteryAdcPin = 35;
 constexpr float kBatteryDivider = 25.1f / 5.1f;
 constexpr float kBatteryMinValidVoltage = 3.0f;
 constexpr float kBatteryMaxValidVoltage = 4.35f;
+constexpr uint32_t kRefreshIntervalsMs[] = {3000U, 5000U, 10000U, 60000U, 300000U};
+constexpr uint8_t kRefreshIntervalCount = sizeof(kRefreshIntervalsMs) / sizeof(kRefreshIntervalsMs[0]);
+constexpr uint32_t kChargeAnimationMs = 4000U;
+constexpr float kChargeVoltageStart = 4.12f;
+constexpr float kChargeVoltageStop = 4.02f;
+constexpr float kChargeRiseThresholdV = 0.006f;
+constexpr float kChargeFallThresholdV = -0.012f;
 
 bool hasText(const char* value)
 {
@@ -84,6 +91,7 @@ void AppState::begin()
 {
     preferences.begin("forge", false);
     temp_is_f = preferences.getBool("is_f", false);
+    refresh_interval_ms = sanitizeRefreshInterval(preferences.getUInt("refresh_ms", app_config::kDefaultRefreshIntervalMs));
     basement_.configured = hasText(app_config::kBeelinkLhmUrl);
     weather_.configured = true;
     M5.Speaker.begin();
@@ -116,15 +124,15 @@ void AppState::update()
 void AppState::updateChargeAnimation()
 {
     const uint32_t now = millis();
-    if (status_.charging && page_ == Page::Dashboard && (now - last_anim_toggle_) > 10000U)
+    if (status_.charging && page_ == Page::Dashboard && (now - last_anim_toggle_) > kChargeAnimationMs)
     {
-        charge_anim_state_ = !charge_anim_state_;
+        charge_anim_phase_ = static_cast<uint8_t>((charge_anim_phase_ + 1U) % 3U);
         last_anim_toggle_ = now;
         charge_anim_display_changed_ = true;
     }
     else if (!status_.charging)
     {
-        charge_anim_state_ = false;
+        charge_anim_phase_ = 0;
         last_anim_toggle_ = now;
     }
 }
@@ -201,6 +209,34 @@ void AppState::toggleTempUnit()
     updateBeelinkTempFormats();
 }
 
+uint32_t AppState::sanitizeRefreshInterval(uint32_t interval_ms) const
+{
+    for (uint8_t i = 0; i < kRefreshIntervalCount; ++i)
+    {
+        if (kRefreshIntervalsMs[i] == interval_ms)
+        {
+            return interval_ms;
+        }
+    }
+    return app_config::kDefaultRefreshIntervalMs;
+}
+
+void AppState::cycleRefreshInterval()
+{
+    uint8_t current_index = 0;
+    refresh_interval_ms = sanitizeRefreshInterval(refresh_interval_ms);
+    for (uint8_t i = 0; i < kRefreshIntervalCount; ++i)
+    {
+        if (kRefreshIntervalsMs[i] == refresh_interval_ms)
+        {
+            current_index = i;
+            break;
+        }
+    }
+    refresh_interval_ms = kRefreshIntervalsMs[(current_index + 1U) % kRefreshIntervalCount];
+    preferences.putUInt("refresh_ms", refresh_interval_ms);
+}
+
 bool AppState::consumeBatteryDisplayChanged()
 {
     const bool changed = battery_display_changed_;
@@ -270,25 +306,34 @@ void AppState::readBattery()
     }
     status_.battery_state = batteryStateFromPercent(status_.battery_percent);
 
-    // Charging voltage can wobble several ADC counts while USB is connected.
-    // Treat charging as a stable UI state, and only request battery-driven
-    // redraws when the displayed integer percentage changes or this boolean
-    // actually flips. Raw voltage/ADC drift must not spam e-paper refreshes.
+    // This M5CoreInk library does not expose a PMIC/USB-power API, so charging
+    // is inferred from the battery ADC with hysteresis and voltage trend. This
+    // is more stable than a single high-voltage cutoff and avoids flickering the
+    // e-paper UI when ADC samples wobble by a few counts.
     const bool was_charging = status_.charging;
+    static bool has_voltage_sample = false;
+    static float previous_voltage = 0.0f;
+    const float voltage_delta = has_voltage_sample ? (status_.battery_voltage - previous_voltage) : 0.0f;
     if (status_.battery_valid)
     {
-        if (!status_.charging && status_.battery_voltage >= 4.18f)
+        if (!status_.charging &&
+            (status_.battery_voltage >= kChargeVoltageStart || voltage_delta >= kChargeRiseThresholdV) &&
+            status_.battery_percent < 100)
         {
             status_.charging = true;
         }
-        else if (status_.charging && status_.battery_voltage <= 4.08f)
+        else if (status_.charging &&
+                 (status_.battery_voltage <= kChargeVoltageStop || voltage_delta <= kChargeFallThresholdV || status_.battery_percent >= 100))
         {
             status_.charging = false;
         }
+        previous_voltage = status_.battery_voltage;
+        has_voltage_sample = true;
     }
     else
     {
         status_.charging = false;
+        has_voltage_sample = false;
     }
 
     const int current_battery_percentage = status_.battery_percent;
@@ -314,10 +359,11 @@ void AppState::readBattery()
     static uint32_t last_log_ms = 0;
     if (last_log_ms == 0 || millis() - last_log_ms > 30000U)
     {
-        Serial.printf("BAT raw=%u adc_mv=%u pack=%.2f pct=%d state=%u\n",
+        Serial.printf("BAT raw=%u adc_mv=%u pack=%.2f delta=%.3f pct=%d state=%u\n",
                       status_.battery_raw_adc,
                       status_.battery_adc_mv,
                       static_cast<double>(status_.battery_voltage),
+                      static_cast<double>(voltage_delta),
                       status_.battery_percent,
                       static_cast<unsigned>(status_.battery_state));
         if (!status_.battery_valid)
@@ -488,7 +534,7 @@ void AppState::fetchBasementStatusIfDue(bool force)
 {
     basement_.configured = hasText(app_config::kBeelinkLhmUrl);
     const uint32_t now = millis();
-    if (!force && basement_.last_attempt_ms != 0 && (now - basement_.last_attempt_ms) < app_config::kNetworkRefreshMs)
+    if (!force && basement_.last_attempt_ms != 0 && (now - basement_.last_attempt_ms) < refresh_interval_ms)
     {
         return;
     }
@@ -586,9 +632,9 @@ void AppState::fetchBasementStatusIfDue(bool force)
     basement_.has_host = true;
     basement_.has_service = true;
     basement_.has_summary = true;
-    copyField(basement_.host, sizeof(basement_.host), "Beelink");
-    copyField(basement_.service, sizeof(basement_.service), "supportFORGE");
-    copyField(basement_.summary, sizeof(basement_.summary), "supportFORGE API");
+    copyField(basement_.host, sizeof(basement_.host), app_config::kTargetHostName);
+    copyField(basement_.service, sizeof(basement_.service), app_config::kAppName);
+    copyField(basement_.summary, sizeof(basement_.summary), app_config::kAppName);
     basement_.has_cpu = true;
     basement_.has_memory = true;
     basement_.has_disk_c = false;
@@ -671,7 +717,7 @@ void AppState::fetchWeatherIfDue(bool force)
     char url[220] = {};
     snprintf(url,
              sizeof(url),
-             "http://api.open-meteo.com/v1/forecast?latitude=%.4f&longitude=%.4f&current=temperature_2m,weather_code&temperature_unit=fahrenheit&timezone=auto",
+              "http://api.open-meteo.com/v1/forecast?latitude=%.4f&longitude=%.4f&current=temperature_2m,weather_code&temperature_unit=celsius&timezone=auto",
              app_config::kFallbackWeatherLatitude,
              app_config::kFallbackWeatherLongitude);
 
@@ -715,13 +761,15 @@ void AppState::fetchWeatherIfDue(bool force)
         return;
     }
 
-    weather_.temperature_f = current["temperature_2m"].as<float>();
+    weather_.temperature_c = current["temperature_2m"].as<float>();
+    weather_.temperature_f = (weather_.temperature_c * 9.0f / 5.0f) + 32.0f;
     weather_.weather_code = current["weather_code"].as<int>();
     copyField(weather_.condition, sizeof(weather_.condition), weatherConditionFromCode(weather_.weather_code));
     copyField(weather_.error, sizeof(weather_.error), "");
     weather_.online = true;
     weather_.last_success_ms = now;
-    Serial.printf("WEATHER ok: %.1fF code=%d condition=%s location=%s\n",
+    Serial.printf("WEATHER ok: %.1fC %.1fF code=%d condition=%s location=%s\n",
+                  static_cast<double>(weather_.temperature_c),
                   static_cast<double>(weather_.temperature_f),
                   weather_.weather_code,
                   weather_.condition,

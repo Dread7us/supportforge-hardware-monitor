@@ -200,7 +200,7 @@ int clampPercent(int percent)
     return percent;
 }
 
-void dashboardBatteryIndicator(int x, int y, const DeviceStatus& s)
+void dashboardBatteryIndicator(int x, int y, const DeviceStatus& s, uint8_t charge_phase)
 {
     constexpr int body_w = 34;
     constexpr int body_h = 16;
@@ -234,7 +234,17 @@ void dashboardBatteryIndicator(int x, int y, const DeviceStatus& s)
     const int fill_y = y + inner_pad;
     const int fill_h = body_h - (inner_pad * 2);
 
-    if (fill_w > 0)
+    if (s.charging)
+    {
+        for (int i = 0; i < 3; ++i)
+        {
+            if (i <= charge_phase)
+            {
+                coreink_gfx::fillRect(x + 4 + (i * 8), y + 4, 5, 8, true);
+            }
+        }
+    }
+    else if (fill_w > 0)
     {
         coreink_gfx::fillRect(fill_x, fill_y, fill_w, fill_h, true);
         coreink_gfx::setClipRect(fill_x, fill_y, fill_w, fill_h);
@@ -253,41 +263,31 @@ void dashboardBatteryIndicator(int x, int y, const DeviceStatus& s)
     coreink_gfx::drawRect(x, y, body_w, body_h, true);
     coreink_gfx::fillRect(x + body_w, y + 5, terminal_w, terminal_h, true);
 
-}
-
-void dashboardChargeBolt(int x, int y, bool filled)
-{
-    // Seven-point zig-zag bolt sized to sit beside the Dashboard battery icon.
-    // Filled mode uses horizontal spans; hollow mode keeps only crisp edges so
-    // the 10-second toggle is visually clear without rapid e-paper changes.
-    constexpr int row_start[] = {5, 4, 3, 2, 6, 5, 4, 3, 2, 1, 0, 4, 3, 2, 1, 0};
-    constexpr int row_end[] =   {9, 8, 7, 6, 6, 5, 4, 8, 7, 6, 5, 4, 3, 2, 1, 0};
-    for (int row = 0; row < 16; ++row)
+    if (s.charging)
     {
-        if (filled)
-        {
-            coreink_gfx::drawHLine(x + row_start[row], y + row, row_end[row] - row_start[row] + 1, true);
-        }
-        else
-        {
-            coreink_gfx::drawPixel(x + row_start[row], y + row, true);
-            if (row_end[row] != row_start[row])
-            {
-                coreink_gfx::drawPixel(x + row_end[row], y + row, true);
-            }
-        }
+        coreink_gfx::drawHLine(x + 18, y + 2, 5, false);
+        coreink_gfx::drawHLine(x + 15, y + 3, 7, false);
+        coreink_gfx::drawHLine(x + 13, y + 4, 7, false);
+        coreink_gfx::drawHLine(x + 17, y + 5, 3, false);
+        coreink_gfx::drawHLine(x + 16, y + 6, 3, false);
+        coreink_gfx::drawHLine(x + 15, y + 7, 8, false);
+        coreink_gfx::drawHLine(x + 14, y + 8, 7, false);
+        coreink_gfx::drawHLine(x + 13, y + 9, 5, false);
+        coreink_gfx::drawHLine(x + 12, y + 10, 3, false);
     }
+
 }
 
 const char* refreshIntervalText(uint32_t interval_ms)
 {
     switch (interval_ms)
     {
-    case 15000U: return "15s";
-    case 30000U: return "30s";
-    case 60000U: return "1m";
-    case 300000U: return "5m";
-    default: return "1m";
+    case 3000U: return "3 sec";
+    case 5000U: return "5 sec";
+    case 10000U: return "10 sec";
+    case 60000U: return "1 min";
+    case 300000U: return "5 min";
+    default: return "1 min";
     }
 }
 
@@ -666,20 +666,13 @@ void renderDashboard(const AppState& state)
     constexpr int battery_x = app_config::kScreenWidth - 5 - battery_total_w;
     constexpr int battery_y = 3;
     constexpr int wifi_w = 22;
-    constexpr int charge_bolt_w = 10;
-    constexpr int charge_bolt_gap = 4;
-    constexpr int charge_bolt_x = battery_x - charge_bolt_gap - charge_bolt_w;
     constexpr int wifi_gap = 7;
-    const int wifi_x = s.charging ? (charge_bolt_x - wifi_gap - wifi_w) : (battery_x - wifi_gap - wifi_w);
+    const int wifi_x = battery_x - wifi_gap - wifi_w;
 
     drawTextCentered(54, 3, s.date_text, coreink_gfx::Font::Small, 88);
     soundIcon(104, 4, state.basement(), false);
     dashboardWifiIndicator(wifi_x, 3);
-    if (s.charging)
-    {
-        dashboardChargeBolt(charge_bolt_x, battery_y, state.chargeAnimState());
-    }
-    dashboardBatteryIndicator(battery_x, battery_y, s);
+    dashboardBatteryIndicator(battery_x, battery_y, s, state.chargeAnimPhase());
 
     const int time_width = static_cast<int>(strlen(s.time_text)) * 24;
     const int time_x = (app_config::kScreenWidth - time_width - 18) / 2;
@@ -698,7 +691,9 @@ void renderDashboard(const AppState& state)
     if (w.online)
     {
         char temp[8] = {};
-        snprintf(temp, sizeof(temp), "%.0fF", static_cast<double>(w.temperature_f));
+        const float weather_temp = state.tempIsF() ? w.temperature_f : w.temperature_c;
+        const char weather_unit = state.tempIsF() ? 'F' : 'C';
+        snprintf(temp, sizeof(temp), "%.0f%c", static_cast<double>(weather_temp), weather_unit);
         drawTextClipped(18, 130, weatherMark(w), coreink_gfx::Font::Small, 8, true);
         drawTextClipped(30, 124, temp, coreink_gfx::Font::Large, 72, true);
         drawTextClipped(106, 134, w.condition, coreink_gfx::Font::Small, 78, true);
@@ -785,7 +780,7 @@ void renderNetwork(const AppState& state)
 
 void renderBeelink(const AppState& state)
 {
-    header("BEELINK", state);
+    header(app_config::kTargetHostName, state);
 
     const BasementStatus& b = state.basement();
     char status_title[24] = {};
@@ -811,7 +806,7 @@ void renderBeelink(const AppState& state)
     selectableMetricRow(10, 141, 180, "UP", b.online && b.has_uptime ? b.uptime : b.error, b.beelink_cursor == 3);
 
     char interval[24] = {};
-    snprintf(interval, sizeof(interval), "INTERVAL: %s", refreshIntervalText(state.refresh_interval_ms));
+    snprintf(interval, sizeof(interval), "%s", refreshIntervalText(state.refresh_interval_ms));
     selectableMetricRow(10, 162, 180, "INT", interval, b.beelink_cursor == 4);
 
     footerNav("MID select", "UP/DOWN move");
@@ -828,8 +823,8 @@ void renderBeelinkCpuDetail(const AppState& state)
     panel(10, 38, 180, 94, "CPU DETAIL");
     if (b.online && b.has_cpu)
     {
-        labelValueRowf(18, 62, 164, "Use", "Beelink %.0f%%", static_cast<double>(b.cpu_load));
-        labelValueRowf(18, 84, 164, "Temp", "Beelink %.0f%c%c", static_cast<double>(cpu_temp), 0xB0, unit);
+        labelValueRowf(18, 62, 164, "Use", "%s %.0f%%", app_config::kTargetHostName, static_cast<double>(b.cpu_load));
+        labelValueRowf(18, 84, 164, "Temp", "%s %.0f%c%c", app_config::kTargetHostName, static_cast<double>(cpu_temp), 0xB0, unit);
         progressBar(18, 108, 164, 14, static_cast<int>(b.cpu_load + 0.5f));
     }
     else
@@ -931,9 +926,9 @@ void renderSystem(const AppState& state)
     formatUptime(s.uptime_ms, uptime, sizeof(uptime));
 
     panel(10, 34, 180, 64, "FIRMWARE");
-    labelValueRow(18, 54, 164, "Ver", app_config::kVersion);
-    labelValueRowf(18, 70, 164, "Heap", "%lu", static_cast<unsigned long>(s.free_heap));
-    labelValueRow(18, 86, 164, "Up", uptime);
+    labelValueRow(18, 54, 164, "App", app_config::kAppName);
+    labelValueRow(18, 70, 164, "Ver", app_config::kVersion);
+    labelValueRowf(18, 86, 164, "Heap", "%lu", static_cast<unsigned long>(s.free_heap));
 
     panel(10, 106, 180, 54, "DEVICE HEALTH");
     labelValueRow(18, 126, 164, "Battery", s.battery_valid ? "valid" : s.battery_fault);

@@ -207,7 +207,7 @@ void Display::showSplash(const char* status)
     coreink_gfx::drawRect(8, 8, 184, 184);
     coreink_gfx::drawRect(12, 12, 176, 176);
     coreink_gfx::fillRect(28, 32, 144, 34, true);
-    coreink_gfx::drawText(38, 41, "COREINK UI", coreink_gfx::Font::Small, true);
+    coreink_gfx::drawText(32, 41, app_config::kAppName, coreink_gfx::Font::Small, true);
     coreink_gfx::drawText(40, 82, "Starting up", coreink_gfx::Font::Small);
     coreink_gfx::drawHLine(38, 106, 124);
     coreink_gfx::fillRect(38, 102, 72, 8, true);
