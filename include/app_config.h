@@ -1,13 +1,13 @@
 #pragma once
 
 #include <cstdint>
-#include <secrets.h>
+#include "secrets.h"
 
 namespace app_config
 {
 
-constexpr const char* kAppName = "CoreInk UI";
-constexpr const char* kVersion = "0.2.0";
+constexpr const char* kAppName = "supportFORGE Monitor";
+constexpr const char* kVersion = "1.0.0";
 
 #ifndef COREINK_NTP_SERVER
 #define COREINK_NTP_SERVER "pool.ntp.org"
@@ -23,25 +23,11 @@ constexpr const char* kBasementStatusUrl = COREINK_BASEMENT_STATUS_URL;
 constexpr const char* kBeelinkLhmUrl = COREINK_BEELINK_LHM_URL;
 constexpr const char* kNtpServer = COREINK_NTP_SERVER;
 constexpr const char* kTimezone = COREINK_TZ;
-constexpr const char* SUPPORTFORGE_AUTH_TOKEN = secrets.SUPPORTFORGE_AUTH_TOKEN;
+constexpr const char* kAuthToken = SUPPORTFORGE_AUTH_TOKEN;
 
-constexpr double kFallbackWeatherLatitude;
-
-#ifndef COREINK_WEATHER_LAT
-#define COREINK_WEATHER_LAT 43.3665
-#endif
-
-#ifndef COREINK_WEATHER_LON
-#define COREINK_WEATHER_LON -124.2179
-#endif
-
-#ifndef COREINK_WEATHER_LOCATION
-#define COREINK_WEATHER_LOCATION "Coos Bay OR"
-#endif
-
-constexpr double kFallbackWeatherLatitude = COREINK_WEATHER_LAT;
-constexpr double kFallbackWeatherLongitude = COREINK_WEATHER_LON;
-constexpr const char* kFallbackWeatherLocation = COREINK_WEATHER_LOCATION;
+constexpr double kFallbackWeatherLatitude = WEATHER_LAT;
+constexpr double kFallbackWeatherLongitude = WEATHER_LON;
+constexpr const char* kWeatherCity = WEATHER_CITY_NAME;
 
 constexpr uint16_t kScreenWidth = 200;
 constexpr uint16_t kScreenHeight = 200;

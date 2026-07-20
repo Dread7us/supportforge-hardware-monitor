@@ -49,7 +49,7 @@ int clippedLengthAvoidPartialStateSuffix(const char* value, int max_chars)
     int clipped_len = max_chars;
 
     // Avoid rendering a dangling one-letter state/province suffix such as
-    // "Coos Bay O" when the full value is "Coos Bay OR". If clipping lands
+    // "Example O" when the full value is "Example OR". If clipping lands
     // inside a trailing two-letter uppercase token, drop that whole token.
     const int token_start = clipped_len - 2;
     if (token_start >= 0 &&

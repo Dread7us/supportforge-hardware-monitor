@@ -87,7 +87,7 @@ struct WeatherStatus
     float temperature_f = 0.0f;
     int weather_code = -1;
     char condition[18] = "WAITING";
-    char location[24] = "Coos Bay OR";
+    char location[24] = "";
     char error[48] = "not fetched";
 };
 

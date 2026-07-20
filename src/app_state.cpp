@@ -88,7 +88,7 @@ void AppState::begin()
     weather_.configured = true;
     M5.Speaker.begin();
     M5.Speaker.mute();
-    copyField(weather_.location, sizeof(weather_.location), app_config::kFallbackWeatherLocation);
+    copyField(weather_.location, sizeof(weather_.location), app_config::kWeatherCity);
     status_.wifi_configured = hasText(app_config::kWifiSsid);
     connectWifiIfNeeded();
     configureTimeIfNeeded();
@@ -509,7 +509,7 @@ void AppState::fetchBasementStatusIfDue(bool force)
         Serial.println("BEELINK HTTP begin failed");
         return;
     }
-    http.addHeader("x-guardian-telemetry-token", app_config::SUPPORTFORGE_AUTH_TOKEN);
+    http.addHeader("x-guardian-telemetry-token", app_config::kAuthToken);
 
     basement_.http_code = http.GET();
     if (basement_.http_code != HTTP_CODE_OK)
@@ -652,7 +652,7 @@ void AppState::fetchWeatherIfDue(bool force)
 {
     weather_.configured = true;
     weather_.gps_location = false;
-    copyField(weather_.location, sizeof(weather_.location), app_config::kFallbackWeatherLocation);
+    copyField(weather_.location, sizeof(weather_.location), app_config::kWeatherCity);
 
     if (WiFi.status() != WL_CONNECTED)
     {
