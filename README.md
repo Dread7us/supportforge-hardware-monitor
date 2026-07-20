@@ -13,7 +13,7 @@
 
 | Dashboard | Network | Server Telemetry |
 | :---: | :---: | :---: |
-| <img src="https://github.com/user-attachments/assets/174a6117-47c4-437b-ad56-65f38a8cda42" width="250" alt="Dashboard View" /> | <img src="https://github.com/user-attachments/assets/79e5c50f-af99-4fdb-8fc6-526d63a609e7" width="250" alt="Network View" /> | <img src="https://github.com/user-attachments/assets/ff72749e-d9ce-4d79-a058-cd2c7f96f7b4" width="250" alt="Server Telemetry View" /> |
+| <img src="https://github.com/user-attachments/assets/ff72749e-d9ce-4d79-a058-cd2c7f96f7b4" width="250" alt="Dashboard View" /> | <img src="https://github.com/user-attachments/assets/79e5c50f-af99-4fdb-8fc6-526d63a609e7" width="250" alt="Network View" /> | <img src="https://github.com/user-attachments/assets/174a6117-47c4-437b-ad56-65f38a8cda42" width="250" alt="Server Telemetry View" /> |
 
 ---
 
