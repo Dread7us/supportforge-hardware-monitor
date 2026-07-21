@@ -200,7 +200,7 @@ int clampPercent(int percent)
     return percent;
 }
 
-void dashboardBatteryIndicator(int x, int y, const DeviceStatus& s, uint8_t charge_phase)
+void dashboardBatteryIndicator(int x, int y, const DeviceStatus& s)
 {
     constexpr int body_w = 34;
     constexpr int body_h = 16;
@@ -234,17 +234,7 @@ void dashboardBatteryIndicator(int x, int y, const DeviceStatus& s, uint8_t char
     const int fill_y = y + inner_pad;
     const int fill_h = body_h - (inner_pad * 2);
 
-    if (s.charging)
-    {
-        for (int i = 0; i < 3; ++i)
-        {
-            if (i <= charge_phase)
-            {
-                coreink_gfx::fillRect(x + 4 + (i * 8), y + 4, 5, 8, true);
-            }
-        }
-    }
-    else if (fill_w > 0)
+    if (fill_w > 0)
     {
         coreink_gfx::fillRect(fill_x, fill_y, fill_w, fill_h, true);
         coreink_gfx::setClipRect(fill_x, fill_y, fill_w, fill_h);
@@ -262,19 +252,6 @@ void dashboardBatteryIndicator(int x, int y, const DeviceStatus& s, uint8_t char
     coreink_gfx::clearClipRect();
     coreink_gfx::drawRect(x, y, body_w, body_h, true);
     coreink_gfx::fillRect(x + body_w, y + 5, terminal_w, terminal_h, true);
-
-    if (s.charging)
-    {
-        coreink_gfx::drawHLine(x + 18, y + 2, 5, false);
-        coreink_gfx::drawHLine(x + 15, y + 3, 7, false);
-        coreink_gfx::drawHLine(x + 13, y + 4, 7, false);
-        coreink_gfx::drawHLine(x + 17, y + 5, 3, false);
-        coreink_gfx::drawHLine(x + 16, y + 6, 3, false);
-        coreink_gfx::drawHLine(x + 15, y + 7, 8, false);
-        coreink_gfx::drawHLine(x + 14, y + 8, 7, false);
-        coreink_gfx::drawHLine(x + 13, y + 9, 5, false);
-        coreink_gfx::drawHLine(x + 12, y + 10, 3, false);
-    }
 
 }
 
@@ -672,7 +649,7 @@ void renderDashboard(const AppState& state)
     drawTextCentered(54, 3, s.date_text, coreink_gfx::Font::Small, 88);
     soundIcon(104, 4, state.basement(), false);
     dashboardWifiIndicator(wifi_x, 3);
-    dashboardBatteryIndicator(battery_x, battery_y, s, state.chargeAnimPhase());
+    dashboardBatteryIndicator(battery_x, battery_y, s);
 
     const int time_width = static_cast<int>(strlen(s.time_text)) * 24;
     const int time_x = (app_config::kScreenWidth - time_width - 18) / 2;

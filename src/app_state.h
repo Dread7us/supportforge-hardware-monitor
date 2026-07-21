@@ -201,6 +201,11 @@ class AppState
     bool last_charging_ = false;
     bool has_battery_display_sample_ = false;
     bool battery_display_changed_ = false;
+    static constexpr uint8_t kBatteryVoltageWindowSize = 8;
+    float battery_voltage_samples_[kBatteryVoltageWindowSize]{};
+    uint8_t battery_voltage_sample_count_ = 0;
+    uint8_t battery_voltage_sample_index_ = 0;
+    int displayed_battery_percent_ = -1;
     uint8_t charge_anim_phase_ = 0;
     bool charge_anim_display_changed_ = false;
     unsigned long last_anim_toggle_ = 0;

@@ -16,11 +16,13 @@ constexpr int kBatteryAdcPin = 35;
 constexpr float kBatteryDivider = 25.1f / 5.1f;
 constexpr float kBatteryMinValidVoltage = 3.0f;
 constexpr float kBatteryMaxValidVoltage = 4.35f;
+constexpr float kBatteryEmptyVoltage = 3.30f;
+constexpr float kBatteryFullVoltage = 4.15f;
 constexpr uint32_t kRefreshIntervalsMs[] = {3000U, 5000U, 10000U, 60000U, 300000U};
 constexpr uint8_t kRefreshIntervalCount = sizeof(kRefreshIntervalsMs) / sizeof(kRefreshIntervalsMs[0]);
 constexpr uint32_t kChargeAnimationMs = 4000U;
-constexpr float kChargeVoltageStart = 4.12f;
-constexpr float kChargeVoltageStop = 4.02f;
+constexpr float kChargeFloatVoltage = 4.12f;
+constexpr float kChargeHysteresisVoltage = 4.05f;
 constexpr float kChargeRiseThresholdV = 0.006f;
 constexpr float kChargeFallThresholdV = -0.012f;
 
@@ -35,15 +37,15 @@ int percentFromVoltage(float voltage)
     {
         return -1;
     }
-    if (voltage <= 3.35f)
-    {
-        return 0;
-    }
-    if (voltage >= 4.20f)
+    if (voltage >= kBatteryFullVoltage)
     {
         return 100;
     }
-    return static_cast<int>(((voltage - 3.35f) * 100.0f / 0.85f) + 0.5f);
+    if (voltage <= kBatteryEmptyVoltage)
+    {
+        return 0;
+    }
+    return static_cast<int>(((voltage - kBatteryEmptyVoltage) * 100.0f / (kBatteryFullVoltage - kBatteryEmptyVoltage)) + 0.5f);
 }
 
 BatteryState batteryStateFromPercent(int percent)
@@ -284,6 +286,7 @@ void AppState::readBattery()
     status_.battery_voltage = static_cast<float>(millivolts) * kBatteryDivider / 1000.0f;
     status_.battery_valid = false;
     status_.battery_percent = -1;
+    float filtered_voltage = status_.battery_voltage;
 
     if (raw < 20 || millivolts < 20)
     {
@@ -299,41 +302,80 @@ void AppState::readBattery()
     }
     else
     {
-        status_.battery_percent = percentFromVoltage(status_.battery_voltage);
+        battery_voltage_samples_[battery_voltage_sample_index_] = status_.battery_voltage;
+        battery_voltage_sample_index_ = static_cast<uint8_t>((battery_voltage_sample_index_ + 1U) % kBatteryVoltageWindowSize);
+        if (battery_voltage_sample_count_ < kBatteryVoltageWindowSize)
+        {
+            ++battery_voltage_sample_count_;
+        }
+
+        float filtered_voltage_total = 0.0f;
+        for (uint8_t i = 0; i < battery_voltage_sample_count_; ++i)
+        {
+            filtered_voltage_total += battery_voltage_samples_[i];
+        }
+        filtered_voltage = filtered_voltage_total / static_cast<float>(battery_voltage_sample_count_);
+
+        status_.battery_percent = percentFromVoltage(filtered_voltage);
         if (status_.battery_percent > 100) status_.battery_percent = 100;
         status_.battery_valid = status_.battery_percent >= 0;
         copyField(status_.battery_fault, sizeof(status_.battery_fault), status_.battery_valid ? "" : "BAT PCT INVALID");
     }
+    if (!status_.battery_valid)
+    {
+        battery_voltage_sample_count_ = 0;
+        battery_voltage_sample_index_ = 0;
+        displayed_battery_percent_ = -1;
+    }
     status_.battery_state = batteryStateFromPercent(status_.battery_percent);
 
     // This M5CoreInk library does not expose a PMIC/USB-power API, so charging
-    // is inferred from the battery ADC with hysteresis and voltage trend. This
-    // is more stable than a single high-voltage cutoff and avoids flickering the
-    // e-paper UI when ADC samples wobble by a few counts.
+    // is inferred from the filtered battery ADC with a hybrid of trend and USB
+    // float voltage. The float check keeps charging true during the CV plateau,
+    // while hysteresis prevents flicker until voltage drops far enough to imply
+    // USB power has been removed or the pack is no longer being held up.
     const bool was_charging = status_.charging;
     static bool has_voltage_sample = false;
     static float previous_voltage = 0.0f;
-    const float voltage_delta = has_voltage_sample ? (status_.battery_voltage - previous_voltage) : 0.0f;
+    const float trend_voltage = status_.battery_valid ? filtered_voltage : status_.battery_voltage;
+    const float voltage_delta = has_voltage_sample ? (trend_voltage - previous_voltage) : 0.0f;
     if (status_.battery_valid)
     {
-        if (!status_.charging &&
-            (status_.battery_voltage >= kChargeVoltageStart || voltage_delta >= kChargeRiseThresholdV) &&
-            status_.battery_percent < 100)
+        const bool active_rise = has_voltage_sample && voltage_delta >= kChargeRiseThresholdV;
+        const bool elevated_float = filtered_voltage >= kChargeFloatVoltage;
+        const bool below_hysteresis = filtered_voltage < kChargeHysteresisVoltage &&
+                                      status_.battery_voltage < kChargeHysteresisVoltage;
+        const bool falling_like_unplug = has_voltage_sample && voltage_delta <= kChargeFallThresholdV;
+
+        if (active_rise || elevated_float)
         {
             status_.charging = true;
         }
-        else if (status_.charging &&
-                 (status_.battery_voltage <= kChargeVoltageStop || voltage_delta <= kChargeFallThresholdV || status_.battery_percent >= 100))
+        else if (status_.charging && (below_hysteresis || falling_like_unplug))
         {
             status_.charging = false;
         }
-        previous_voltage = status_.battery_voltage;
+        previous_voltage = trend_voltage;
         has_voltage_sample = true;
     }
     else
     {
         status_.charging = false;
         has_voltage_sample = false;
+    }
+
+    if (status_.battery_valid)
+    {
+        if (displayed_battery_percent_ < 0 || status_.charging)
+        {
+            displayed_battery_percent_ = status_.battery_percent;
+        }
+        else if (status_.battery_percent < displayed_battery_percent_)
+        {
+            displayed_battery_percent_ = status_.battery_percent;
+        }
+        status_.battery_percent = displayed_battery_percent_;
+        status_.battery_state = batteryStateFromPercent(status_.battery_percent);
     }
 
     const int current_battery_percentage = status_.battery_percent;
@@ -359,13 +401,15 @@ void AppState::readBattery()
     static uint32_t last_log_ms = 0;
     if (last_log_ms == 0 || millis() - last_log_ms > 30000U)
     {
-        Serial.printf("BAT raw=%u adc_mv=%u pack=%.2f delta=%.3f pct=%d state=%u\n",
+        Serial.printf("BAT raw=%u adc_mv=%u pack=%.2f filt=%.2f delta=%.3f pct=%d state=%u charging=%d\n",
                       status_.battery_raw_adc,
                       status_.battery_adc_mv,
                       static_cast<double>(status_.battery_voltage),
+                      static_cast<double>(trend_voltage),
                       static_cast<double>(voltage_delta),
                       status_.battery_percent,
-                      static_cast<unsigned>(status_.battery_state));
+                      static_cast<unsigned>(status_.battery_state),
+                      status_.charging);
         if (!status_.battery_valid)
         {
             Serial.printf("BAT fault=%s\n", status_.battery_fault);
