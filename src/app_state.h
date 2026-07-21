@@ -14,6 +14,7 @@ enum class Page : uint8_t
     Power,
     Sleep,
     Count,
+    Alarm,
     BeelinkCpuDetail,
     BeelinkMemDetail,
     BeelinkTempDetail,
@@ -144,6 +145,18 @@ struct BasementStatus
     uint8_t disk_count = 0;
 };
 
+struct AlarmStatus
+{
+    bool is_alarming = false;
+    bool is_muted = false;
+    bool is_dismissed = false;
+    uint32_t snoozed_until_ms = 0;
+    char error_title[32] = "";
+    char error_details[64] = "";
+    uint8_t buzzer_beeps_played = 0;
+    uint32_t next_buzzer_ms = 0;
+};
+
 class AppState
 {
   public:
@@ -156,6 +169,7 @@ class AppState
     const BasementStatus& basement() const { return basement_; }
     BasementStatus& basement() { return basement_; }
     const WeatherStatus& weather() const { return weather_; }
+    const AlarmStatus& alarm() const { return alarm_; }
     uint32_t lastStatusUpdateMs() const { return last_status_update_ms_; }
     uint32_t refresh_interval_ms = 60000;
 
@@ -166,8 +180,16 @@ class AppState
     void forceNetworkRefresh();
     void toggleServerAlarmMuteIfOffline();
     void updateServerAlarm();
+    void muteAlarm();
+    void dismissAlarm();
+    void snoozeAlarm();
+    bool isAlarmActive() const { return alarm_.is_alarming; }
+    bool shouldShowAlarmReminder() const;
     void toggleTempUnit();
-    bool tempIsF() const { return temp_is_f; }
+    bool hostTempIsF() const { return host_is_f_; }
+    bool dashboardTempIsF() const { return dash_is_f_; }
+    bool is24HourTime() const { return is_24h_; }
+    void cycleDashboardDisplayPrefs();
     void cycleRefreshInterval();
     bool consumeBatteryDisplayChanged();
     uint8_t chargeAnimPhase() const { return charge_anim_phase_; }
@@ -187,16 +209,22 @@ class AppState
     void fetchWeatherIfDue(bool force = false);
     void noteBasementFailure(const char* error, int http_code = 0);
     void setBasementOnline();
+    void triggerAlarm(const char* title, const char* details);
+    void silenceAlarmBuzzer();
+    void resetAlarmState();
     void updateBeelinkTempFormats();
     uint32_t sanitizeRefreshInterval(uint32_t interval_ms) const;
     void syncRtcFromSystemTime(const tm& timeinfo);
 
     Page page_ = Page::Dashboard;
     Preferences preferences;
-    bool temp_is_f = false;
+    bool host_is_f_ = false;
+    bool dash_is_f_ = true;
+    bool is_24h_ = false;
     DeviceStatus status_{};
     BasementStatus basement_{};
     WeatherStatus weather_{};
+    AlarmStatus alarm_{};
     int last_battery_percentage_ = -2;
     bool last_charging_ = false;
     bool has_battery_display_sample_ = false;
@@ -206,6 +234,7 @@ class AppState
     uint8_t battery_voltage_sample_count_ = 0;
     uint8_t battery_voltage_sample_index_ = 0;
     int displayed_battery_percent_ = -1;
+    uint32_t last_charge_percent_increment_ms_ = 0;
     uint8_t charge_anim_phase_ = 0;
     bool charge_anim_display_changed_ = false;
     unsigned long last_anim_toggle_ = 0;

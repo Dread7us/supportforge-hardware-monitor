@@ -50,6 +50,11 @@ constexpr uint32_t kNtpResyncMs = 6UL * 60UL * 60UL * 1000UL;
 constexpr uint32_t kHttpTimeoutMs = 4'000;
 constexpr uint32_t kDebounceMs = 40;
 constexpr uint8_t kBasementAlarmFailureThreshold = 3;
+constexpr uint32_t kAlarmSnoozeMs = 15UL * 60UL * 1000UL;
+constexpr uint32_t kAlarmBeepMs = 140;
+constexpr uint32_t kAlarmBeepGapMs = 160;
+constexpr uint32_t kAlarmPatternPauseMs = 5UL * 1000UL;
+constexpr uint8_t kAlarmBeepsPerPattern = 3;
 // Set to 0 to avoid periodic heavy full-clears. Full clears are still available
 // for explicit actions such as startup and manual refresh commands.
 constexpr uint8_t kFullClearEveryRefreshes = 0;

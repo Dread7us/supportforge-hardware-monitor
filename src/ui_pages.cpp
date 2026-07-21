@@ -287,6 +287,17 @@ void soundIcon(int x, int y, const BasementStatus& b, bool inverse)
     }
 }
 
+void mutedBellIcon(int x, int y, bool inverse)
+{
+    coreink_gfx::drawHLine(x + 3, y + 11, 11, inverse);
+    coreink_gfx::drawVLine(x + 4, y + 5, 6, inverse);
+    coreink_gfx::drawVLine(x + 13, y + 5, 6, inverse);
+    coreink_gfx::drawHLine(x + 6, y + 3, 5, inverse);
+    coreink_gfx::drawPixel(x + 8, y + 13, inverse);
+    coreink_gfx::drawHLine(x + 2, y + 2, 14, inverse);
+    coreink_gfx::drawHLine(x + 1, y + 14, 16, inverse);
+}
+
 const char* batteryStateText(BatteryState state)
 {
     switch (state)
@@ -353,7 +364,14 @@ void header(const char* title, const AppState& state)
     {
         bluetoothIcon(140, 7, s, true);
     }
-    soundIcon(148, 6, state.basement(), true);
+    if (state.shouldShowAlarmReminder())
+    {
+        mutedBellIcon(148, 6, true);
+    }
+    else
+    {
+        soundIcon(148, 6, state.basement(), true);
+    }
     drawTextRightAligned(app_config::kScreenWidth - 4, 6, battery_pct, coreink_gfx::Font::Small, 32, true);
 
 }
@@ -647,7 +665,14 @@ void renderDashboard(const AppState& state)
     const int wifi_x = battery_x - wifi_gap - wifi_w;
 
     drawTextCentered(54, 3, s.date_text, coreink_gfx::Font::Small, 88);
-    soundIcon(104, 4, state.basement(), false);
+    if (state.shouldShowAlarmReminder())
+    {
+        mutedBellIcon(104, 4, false);
+    }
+    else
+    {
+        soundIcon(104, 4, state.basement(), false);
+    }
     dashboardWifiIndicator(wifi_x, 3);
     dashboardBatteryIndicator(battery_x, battery_y, s);
 
@@ -668,8 +693,8 @@ void renderDashboard(const AppState& state)
     if (w.online)
     {
         char temp[8] = {};
-        const float weather_temp = state.tempIsF() ? w.temperature_f : w.temperature_c;
-        const char weather_unit = state.tempIsF() ? 'F' : 'C';
+        const float weather_temp = state.dashboardTempIsF() ? w.temperature_f : w.temperature_c;
+        const char weather_unit = state.dashboardTempIsF() ? 'F' : 'C';
         snprintf(temp, sizeof(temp), "%.0f%c", static_cast<double>(weather_temp), weather_unit);
         drawTextClipped(18, 130, weatherMark(w), coreink_gfx::Font::Small, 8, true);
         drawTextClipped(30, 124, temp, coreink_gfx::Font::Large, 72, true);
@@ -794,8 +819,8 @@ void renderBeelinkCpuDetail(const AppState& state)
     header("CPU DETAIL", state);
 
     const BasementStatus& b = state.basement();
-    const char unit = state.tempIsF() ? 'F' : 'C';
-    const float cpu_temp = state.tempIsF() ? b.cpu_temp_f : b.cpu_temp_c;
+    const char unit = state.hostTempIsF() ? 'F' : 'C';
+    const float cpu_temp = state.hostTempIsF() ? b.cpu_temp_f : b.cpu_temp_c;
 
     panel(10, 38, 180, 94, "CPU DETAIL");
     if (b.online && b.has_cpu)
@@ -845,7 +870,7 @@ void renderBeelinkTempDetail(const AppState& state)
     header("TEMP DETAIL", state);
 
     const BasementStatus& b = state.basement();
-    const bool is_f = state.tempIsF();
+    const bool is_f = state.hostTempIsF();
     const char unit = is_f ? 'F' : 'C';
     const char inactive_unit = is_f ? 'C' : 'F';
     const float bl_cpu = is_f ? b.cpu_temp_f : b.cpu_temp_c;
@@ -926,7 +951,7 @@ void renderHelpButtons(const AppState& state)
     labelValueRow(18, 70, 164, "UP", "previous page");
 
     panel(10, 102, 180, 72, "ACTIONS");
-    labelValueRow(18, 122, 164, "MID", "refresh data now");
+    labelValueRow(18, 122, 164, "MID", "home time/WX mode");
     labelValueRow(18, 138, 164, "DOWN", "sleep screen");
     drawTextCentered(100, 158, "USB power may wake", coreink_gfx::Font::Small, 160);
 
@@ -960,6 +985,35 @@ void renderSleep(const AppState& state)
     drawTextCentered(100, 133, "PWR Wake", coreink_gfx::Font::Small, 136);
 
     footerNav("STATIC", "LOW PWR");
+}
+
+void renderAlarmPage(const AppState& state)
+{
+    const AlarmStatus& alarm = state.alarm();
+    const char* title = alarm.error_title[0] ? alarm.error_title : "ALARM";
+    const char* details = alarm.error_details[0] ? alarm.error_details : "Attention required";
+
+    coreink_gfx::drawRect(4, 4, 192, 192);
+    coreink_gfx::drawRect(8, 8, 184, 184);
+    coreink_gfx::fillRect(14, 16, 172, 26, true);
+    drawTextCentered(100, 21, "ACTIVE ALARM", coreink_gfx::Font::Small, 160, true);
+
+    mutedBellIcon(90, 54, false);
+    mutedBellIcon(100, 54, false);
+    coreink_gfx::drawHLine(52, 78, 96);
+    drawTextCentered(100, 92, title, coreink_gfx::Font::Small, 176);
+
+    panel(14, 116, 172, 38, "DETAILS");
+    drawTextCentered(100, 137, details, coreink_gfx::Font::Small, 156);
+
+    const int y = 166;
+    coreink_gfx::drawHLine(8, y - 8, 184);
+    drawTextCentered(34, y, "[UP]", coreink_gfx::Font::Small, 48);
+    drawTextCentered(34, y + 15, "Snooze", coreink_gfx::Font::Small, 54);
+    drawTextCentered(100, y, "[MID]", coreink_gfx::Font::Small, 54);
+    drawTextCentered(100, y + 15, "Dismiss", coreink_gfx::Font::Small, 60);
+    drawTextCentered(166, y, "[DWN]", coreink_gfx::Font::Small, 54);
+    drawTextCentered(166, y + 15, "Mute", coreink_gfx::Font::Small, 48);
 }
 
 } // namespace ui_pages

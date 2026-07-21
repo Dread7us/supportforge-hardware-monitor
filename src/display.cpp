@@ -229,6 +229,9 @@ void Display::render(const AppState& state, bool force_full_clear)
 
     switch (state.page())
     {
+    case Page::Alarm:
+        ui_pages::renderAlarmPage(state);
+        break;
     case Page::Dashboard:
         ui_pages::renderDashboard(state);
         break;

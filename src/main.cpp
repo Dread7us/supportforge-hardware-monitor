@@ -27,6 +27,7 @@ uint32_t refreshIntervalFor(Page page)
     case Page::System:
         return app_config::kSystemRefreshMs;
     case Page::Sleep:
+    case Page::Alarm:
         return 0;
     case Page::Power:
     case Page::Network:
@@ -135,6 +136,35 @@ void handleButton(ButtonEvent event)
         return;
     }
 
+    if (app.isAlarmActive())
+    {
+        switch (event)
+        {
+        case ButtonEvent::Previous:
+            app.snoozeAlarm();
+            force_render = true;
+            force_full_clear = true;
+            return;
+        case ButtonEvent::Select:
+            app.dismissAlarm();
+            force_render = true;
+            force_full_clear = true;
+            return;
+        case ButtonEvent::Next:
+            app.muteAlarm();
+            force_render = true;
+            force_full_clear = false;
+            return;
+        case ButtonEvent::FastRefresh:
+        case ButtonEvent::FullRefresh:
+            handleRefreshButton(event);
+            return;
+        case ButtonEvent::None:
+        default:
+            return;
+        }
+    }
+
     if (app.page() == Page::BeelinkCpuDetail || app.page() == Page::BeelinkMemDetail || app.page() == Page::BeelinkUptimeDetail)
     {
         if (handleRefreshButton(event))
@@ -189,9 +219,17 @@ void handleButton(ButtonEvent event)
         force_render = true;
         break;
     case ButtonEvent::Select:
-        app.forceNetworkRefresh();
+        if (app.page() == Page::Dashboard)
+        {
+            app.cycleDashboardDisplayPrefs();
+            force_full_clear = false;
+        }
+        else
+        {
+            app.forceNetworkRefresh();
+            force_full_clear = true;
+        }
         force_render = true;
-        force_full_clear = true;
         break;
     case ButtonEvent::FastRefresh:
     case ButtonEvent::FullRefresh:

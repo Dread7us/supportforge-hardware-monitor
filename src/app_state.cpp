@@ -25,6 +25,7 @@ constexpr float kChargeFloatVoltage = 4.12f;
 constexpr float kChargeHysteresisVoltage = 4.05f;
 constexpr float kChargeRiseThresholdV = 0.006f;
 constexpr float kChargeFallThresholdV = -0.012f;
+constexpr uint32_t kBatteryChargePercentStepMs = 90000U;
 
 bool hasText(const char* value)
 {
@@ -92,7 +93,9 @@ void copyField(char* dest, size_t len, const char* value)
 void AppState::begin()
 {
     preferences.begin("forge", false);
-    temp_is_f = preferences.getBool("is_f", false);
+    host_is_f_ = preferences.getBool("host_is_f", false);
+    dash_is_f_ = preferences.getBool("dash_is_f", true);
+    is_24h_ = preferences.getBool("is_24h", false);
     refresh_interval_ms = sanitizeRefreshInterval(preferences.getUInt("refresh_ms", app_config::kDefaultRefreshIntervalMs));
     basement_.configured = hasText(app_config::kBeelinkLhmUrl);
     weather_.configured = true;
@@ -176,12 +179,7 @@ void AppState::toggleServerAlarmMuteIfOffline()
 {
     if (basement_.server_status == ServerStatus::Offline || basement_.alarm_active)
     {
-        basement_.alarm_muted = !basement_.alarm_muted;
-        if (basement_.alarm_muted)
-        {
-            M5.Speaker.mute();
-        }
-        Serial.printf("BEELINK alarm %s by button\n", basement_.alarm_muted ? "muted" : "unmuted");
+        muteAlarm();
     }
 }
 
@@ -189,26 +187,111 @@ void AppState::updateServerAlarm()
 {
     M5.Speaker.update();
 
-    if (!basement_.alarm_active || basement_.alarm_muted)
+    if (!alarm_.is_alarming || alarm_.is_muted)
     {
         return;
     }
 
-    static uint32_t last_beep_ms = 0;
     const uint32_t now = millis();
-    if (last_beep_ms == 0 || (now - last_beep_ms) >= 900U)
+    if (alarm_.next_buzzer_ms == 0 || static_cast<int32_t>(now - alarm_.next_buzzer_ms) >= 0)
     {
         M5.Speaker.setVolume(2);
-        M5.Speaker.tone(1800, 160);
-        last_beep_ms = now;
+        M5.Speaker.tone(1800, app_config::kAlarmBeepMs);
+        ++alarm_.buzzer_beeps_played;
+        if (alarm_.buzzer_beeps_played >= app_config::kAlarmBeepsPerPattern)
+        {
+            alarm_.buzzer_beeps_played = 0;
+            alarm_.next_buzzer_ms = now + app_config::kAlarmPatternPauseMs;
+        }
+        else
+        {
+            alarm_.next_buzzer_ms = now + app_config::kAlarmBeepMs + app_config::kAlarmBeepGapMs;
+        }
     }
+}
+
+void AppState::muteAlarm()
+{
+    if (!basement_.alarm_active && !alarm_.is_alarming)
+    {
+        return;
+    }
+    alarm_.is_muted = true;
+    basement_.alarm_muted = true;
+    silenceAlarmBuzzer();
+    Serial.println("BEELINK alarm muted");
+}
+
+void AppState::dismissAlarm()
+{
+    if (!basement_.alarm_active && !alarm_.is_alarming)
+    {
+        return;
+    }
+    alarm_.is_alarming = false;
+    alarm_.is_muted = true;
+    alarm_.is_dismissed = true;
+    alarm_.snoozed_until_ms = 0;
+    basement_.alarm_muted = true;
+    silenceAlarmBuzzer();
+    setPage(Page::Dashboard);
+    Serial.println("BEELINK alarm dismissed");
+}
+
+void AppState::snoozeAlarm()
+{
+    if (!basement_.alarm_active && !alarm_.is_alarming)
+    {
+        return;
+    }
+    alarm_.is_alarming = false;
+    alarm_.is_muted = true;
+    alarm_.is_dismissed = false;
+    alarm_.snoozed_until_ms = millis() + app_config::kAlarmSnoozeMs;
+    basement_.alarm_muted = true;
+    silenceAlarmBuzzer();
+    setPage(Page::Dashboard);
+    Serial.println("BEELINK alarm snoozed");
+}
+
+bool AppState::shouldShowAlarmReminder() const
+{
+    return basement_.alarm_active && !alarm_.is_alarming &&
+           (alarm_.is_muted || alarm_.is_dismissed || alarm_.snoozed_until_ms != 0);
 }
 
 void AppState::toggleTempUnit()
 {
-    temp_is_f = !temp_is_f;
-    preferences.putBool("is_f", temp_is_f);
+    host_is_f_ = !host_is_f_;
+    preferences.putBool("host_is_f", host_is_f_);
     updateBeelinkTempFormats();
+}
+
+void AppState::cycleDashboardDisplayPrefs()
+{
+    if (!is_24h_ && dash_is_f_)
+    {
+        is_24h_ = true;
+        dash_is_f_ = true;
+    }
+    else if (is_24h_ && dash_is_f_)
+    {
+        is_24h_ = true;
+        dash_is_f_ = false;
+    }
+    else if (is_24h_ && !dash_is_f_)
+    {
+        is_24h_ = false;
+        dash_is_f_ = false;
+    }
+    else
+    {
+        is_24h_ = false;
+        dash_is_f_ = true;
+    }
+
+    preferences.putBool("is_24h", is_24h_);
+    preferences.putBool("dash_is_f", dash_is_f_);
 }
 
 uint32_t AppState::sanitizeRefreshInterval(uint32_t interval_ms) const
@@ -326,6 +409,7 @@ void AppState::readBattery()
         battery_voltage_sample_count_ = 0;
         battery_voltage_sample_index_ = 0;
         displayed_battery_percent_ = -1;
+        last_charge_percent_increment_ms_ = 0;
     }
     status_.battery_state = batteryStateFromPercent(status_.battery_percent);
 
@@ -366,13 +450,60 @@ void AppState::readBattery()
 
     if (status_.battery_valid)
     {
-        if (displayed_battery_percent_ < 0 || status_.charging)
+        const int raw_battery_percent = status_.battery_percent;
+        const uint32_t now_ms = millis();
+
+        if (displayed_battery_percent_ < 0)
         {
-            displayed_battery_percent_ = status_.battery_percent;
+            displayed_battery_percent_ = raw_battery_percent;
+            last_charge_percent_increment_ms_ = now_ms;
         }
-        else if (status_.battery_percent < displayed_battery_percent_)
+        else if (status_.charging)
         {
-            displayed_battery_percent_ = status_.battery_percent;
+            if (!was_charging)
+            {
+                // Anchor the displayed value at the unplugged percentage when USB
+                // is first detected. This prevents charger voltage from instantly
+                // pulling a dead/low pack up to an unrealistic displayed percent.
+                last_charge_percent_increment_ms_ = now_ms;
+            }
+
+            if (raw_battery_percent < displayed_battery_percent_)
+            {
+                // Downward movement is safe and should remain immediate so an
+                // unplug/drop can recover through the existing anti-bounce path.
+                displayed_battery_percent_ = raw_battery_percent;
+                last_charge_percent_increment_ms_ = now_ms;
+            }
+            else if (raw_battery_percent > displayed_battery_percent_)
+            {
+                if (last_charge_percent_increment_ms_ == 0)
+                {
+                    last_charge_percent_increment_ms_ = now_ms;
+                }
+                const uint32_t elapsed_ms = now_ms - last_charge_percent_increment_ms_;
+                const uint32_t allowed_steps = elapsed_ms / kBatteryChargePercentStepMs;
+                if (allowed_steps > 0)
+                {
+                    const int remaining = raw_battery_percent - displayed_battery_percent_;
+                    const int increment = static_cast<int>(std::min<uint32_t>(allowed_steps, static_cast<uint32_t>(remaining)));
+                    displayed_battery_percent_ += increment;
+                    last_charge_percent_increment_ms_ += static_cast<uint32_t>(increment) * kBatteryChargePercentStepMs;
+                }
+            }
+            else
+            {
+                last_charge_percent_increment_ms_ = now_ms;
+            }
+        }
+        else if (raw_battery_percent < displayed_battery_percent_)
+        {
+            displayed_battery_percent_ = raw_battery_percent;
+            last_charge_percent_increment_ms_ = 0;
+        }
+        else
+        {
+            last_charge_percent_increment_ms_ = 0;
         }
         status_.battery_percent = displayed_battery_percent_;
         status_.battery_state = batteryStateFromPercent(status_.battery_percent);
@@ -464,10 +595,18 @@ void AppState::readTime()
     if (status_.rtc_valid)
     {
         status_.time_source = status_.time_synced ? TimeSource::Ntp : TimeSource::RtcClock;
-        const int hour12 = (rtc_time.Hours % 12) == 0 ? 12 : (rtc_time.Hours % 12);
-        snprintf(status_.time_text, sizeof(status_.time_text), "%d:%02d", hour12, rtc_time.Minutes);
+        if (is_24h_)
+        {
+            snprintf(status_.time_text, sizeof(status_.time_text), "%02d:%02d", rtc_time.Hours, rtc_time.Minutes);
+            snprintf(status_.meridiem_text, sizeof(status_.meridiem_text), "");
+        }
+        else
+        {
+            const int hour12 = (rtc_time.Hours % 12) == 0 ? 12 : (rtc_time.Hours % 12);
+            snprintf(status_.time_text, sizeof(status_.time_text), "%d:%02d", hour12, rtc_time.Minutes);
+            snprintf(status_.meridiem_text, sizeof(status_.meridiem_text), "%s", rtc_time.Hours >= 12 ? "PM" : "AM");
+        }
         snprintf(status_.second_text, sizeof(status_.second_text), "%02d", rtc_time.Seconds);
-        snprintf(status_.meridiem_text, sizeof(status_.meridiem_text), "%s", rtc_time.Hours >= 12 ? "PM" : "AM");
         snprintf(status_.date_text, sizeof(status_.date_text), "%02d-%02d-%04d", rtc_date.Month, rtc_date.Date, rtc_date.Year);
         copyField(status_.rtc_fault, sizeof(status_.rtc_fault), "");
         return;
@@ -712,23 +851,67 @@ void AppState::noteBasementFailure(const char* error, int http_code)
     basement_.has_disk_c = false;
     basement_.has_disk_d = false;
     copyField(basement_.error, sizeof(basement_.error), hasText(error) ? error : "offline");
+
+    if (basement_.alarm_active)
+    {
+        const uint32_t now = millis();
+        const bool snoozed = alarm_.snoozed_until_ms != 0 && static_cast<int32_t>(now - alarm_.snoozed_until_ms) < 0;
+        if (!alarm_.is_alarming && !alarm_.is_dismissed && !snoozed)
+        {
+            triggerAlarm("BEELINK OFFLINE", basement_.error);
+        }
+    }
 }
 
 void AppState::setBasementOnline()
 {
     basement_.online = true;
     basement_.server_status = ServerStatus::Online;
-    basement_.alarm_muted = false;
-    basement_.alarm_active = false;
+    resetAlarmState();
     basement_.consecutive_failures = 0;
     copyField(basement_.error, sizeof(basement_.error), "");
 }
 
+void AppState::triggerAlarm(const char* title, const char* details)
+{
+    copyField(alarm_.error_title, sizeof(alarm_.error_title), hasText(title) ? title : "ALARM");
+    copyField(alarm_.error_details, sizeof(alarm_.error_details), hasText(details) ? details : "Attention required");
+    alarm_.is_alarming = true;
+    alarm_.is_muted = false;
+    alarm_.is_dismissed = false;
+    alarm_.snoozed_until_ms = 0;
+    alarm_.buzzer_beeps_played = 0;
+    alarm_.next_buzzer_ms = 0;
+    basement_.alarm_muted = false;
+    setPage(Page::Alarm);
+    Serial.printf("ALARM triggered: %s - %s\n", alarm_.error_title, alarm_.error_details);
+}
+
+void AppState::silenceAlarmBuzzer()
+{
+    M5.Speaker.mute();
+    alarm_.buzzer_beeps_played = 0;
+    alarm_.next_buzzer_ms = 0;
+}
+
+void AppState::resetAlarmState()
+{
+    const bool was_showing_alarm = page_ == Page::Alarm;
+    silenceAlarmBuzzer();
+    alarm_ = AlarmStatus{};
+    basement_.alarm_muted = false;
+    basement_.alarm_active = false;
+    if (was_showing_alarm)
+    {
+        setPage(Page::Dashboard);
+    }
+}
+
 void AppState::updateBeelinkTempFormats()
 {
-    const float cpu_temp = temp_is_f ? basement_.cpu_temp_f : basement_.cpu_temp_c;
-    const float nvme_temp = temp_is_f ? basement_.nvme_temp_f : basement_.nvme_temp_c;
-    const char unit = temp_is_f ? 'F' : 'C';
+    const float cpu_temp = host_is_f_ ? basement_.cpu_temp_f : basement_.cpu_temp_c;
+    const float nvme_temp = host_is_f_ ? basement_.nvme_temp_f : basement_.nvme_temp_c;
+    const char unit = host_is_f_ ? 'F' : 'C';
     snprintf(basement_.disk,
              sizeof(basement_.disk),
              "CPU:%d\xB0%c NV:%d\xB0%c",
