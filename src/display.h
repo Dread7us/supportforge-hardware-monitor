@@ -30,8 +30,11 @@ class Display
     bool begin();
     void showSplash(const char* status = nullptr);
     void render(const AppState& state, bool force_full_clear = false);
+    void renderManualFullRefresh(const AppState& state);
 
   private:
     void clear(bool full_clear);
+    void drawPage(const AppState& state);
     void push(bool full_refresh);
+    void pushManualFullRefresh();
 };

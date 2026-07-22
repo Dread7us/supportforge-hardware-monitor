@@ -992,28 +992,25 @@ void renderAlarmPage(const AppState& state)
     const AlarmStatus& alarm = state.alarm();
     const char* title = alarm.error_title[0] ? alarm.error_title : "ALARM";
     const char* details = alarm.error_details[0] ? alarm.error_details : "Attention required";
+    const bool muted = alarm.is_muted || state.basement().alarm_muted;
 
     coreink_gfx::drawRect(4, 4, 192, 192);
     coreink_gfx::drawRect(8, 8, 184, 184);
     coreink_gfx::fillRect(14, 16, 172, 26, true);
-    drawTextCentered(100, 21, "ACTIVE ALARM", coreink_gfx::Font::Small, 160, true);
+    drawTextCentered(100, 21, muted ? "ALARM MUTED" : "ACTIVE ALARM", coreink_gfx::Font::Small, 160, true);
 
     mutedBellIcon(90, 54, false);
     mutedBellIcon(100, 54, false);
-    coreink_gfx::drawHLine(52, 78, 96);
-    drawTextCentered(100, 92, title, coreink_gfx::Font::Small, 176);
+    drawTextCentered(100, 82, title, coreink_gfx::Font::Small, 176);
+    drawTextCentered(101, 82, title, coreink_gfx::Font::Small, 176);
 
     panel(14, 116, 172, 38, "DETAILS");
     drawTextCentered(100, 137, details, coreink_gfx::Font::Small, 156);
 
-    const int y = 166;
-    coreink_gfx::drawHLine(8, y - 8, 184);
-    drawTextCentered(34, y, "[UP]", coreink_gfx::Font::Small, 48);
-    drawTextCentered(34, y + 15, "Snooze", coreink_gfx::Font::Small, 54);
-    drawTextCentered(100, y, "[MID]", coreink_gfx::Font::Small, 54);
-    drawTextCentered(100, y + 15, "Dismiss", coreink_gfx::Font::Small, 60);
-    drawTextCentered(166, y, "[DWN]", coreink_gfx::Font::Small, 54);
-    drawTextCentered(166, y + 15, "Mute", coreink_gfx::Font::Small, 48);
+    const int footer_y = 164;
+    coreink_gfx::drawHLine(8, footer_y - 8, 184);
+    drawTextCentered(100, footer_y, "UP:Snooze | MID:Dismiss", coreink_gfx::Font::Small, 184);
+    drawTextCentered(100, footer_y + 15, "DWN:Mute", coreink_gfx::Font::Small, 184);
 }
 
 } // namespace ui_pages

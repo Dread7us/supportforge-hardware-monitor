@@ -162,6 +162,7 @@ class AppState
   public:
     void begin();
     void update();
+    void serviceBackground();
     void updateChargeAnimation();
 
     Page page() const { return page_; }
@@ -194,6 +195,9 @@ class AppState
     bool consumeBatteryDisplayChanged();
     uint8_t chargeAnimPhase() const { return charge_anim_phase_; }
     bool consumeChargeAnimDisplayChanged();
+    bool consumeAlarmDisplayChanged();
+    bool consumeAlarmAutoDismissed();
+    void consumeDisplayChangeFlags();
 
     bool shouldFullClear() const;
 
@@ -210,13 +214,17 @@ class AppState
     void noteBasementFailure(const char* error, int http_code = 0);
     void setBasementOnline();
     void triggerAlarm(const char* title, const char* details);
+    void resetAlarmBuzzerForNewIncident();
+    void playConnectionChime();
     void silenceAlarmBuzzer();
     void resetAlarmState();
     void updateBeelinkTempFormats();
     uint32_t sanitizeRefreshInterval(uint32_t interval_ms) const;
     void syncRtcFromSystemTime(const tm& timeinfo);
+    static void backgroundTask(void* context);
 
     Page page_ = Page::Dashboard;
+    Page page_before_alarm_ = Page::Dashboard;
     Preferences preferences;
     bool host_is_f_ = false;
     bool dash_is_f_ = true;
@@ -233,14 +241,19 @@ class AppState
     float battery_voltage_samples_[kBatteryVoltageWindowSize]{};
     uint8_t battery_voltage_sample_count_ = 0;
     uint8_t battery_voltage_sample_index_ = 0;
-    int displayed_battery_percent_ = -1;
+    int last_forced_battery_percentage_ = -2;
     uint32_t last_charge_percent_increment_ms_ = 0;
     uint8_t charge_anim_phase_ = 0;
     bool charge_anim_display_changed_ = false;
+    bool alarm_display_changed_ = false;
+    bool alarm_auto_dismissed_ = false;
+    bool background_task_started_ = false;
+    bool was_host_connected_ = false;
     unsigned long last_anim_toggle_ = 0;
     uint32_t last_status_update_ms_ = 0;
     uint32_t last_wifi_attempt_ms_ = 0;
     uint32_t last_wifi_scan_ms_ = 0;
     uint32_t last_time_sync_attempt_ms_ = 0;
+    uint32_t last_battery_read_ms_ = 0;
     bool time_configured_ = false;
 };

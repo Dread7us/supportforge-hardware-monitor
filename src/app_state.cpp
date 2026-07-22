@@ -26,6 +26,10 @@ constexpr float kChargeHysteresisVoltage = 4.05f;
 constexpr float kChargeRiseThresholdV = 0.006f;
 constexpr float kChargeFallThresholdV = -0.012f;
 constexpr uint32_t kBatteryChargePercentStepMs = 90000U;
+constexpr uint32_t kBatteryPollIntervalMs = 60000U;
+constexpr uint8_t kBatteryClusterSamples = 5;
+constexpr uint32_t kBatteryClusterDelayMs = 10U;
+constexpr int kBatteryForceRefreshThresholdPercent = 5;
 
 bool hasText(const char* value)
 {
@@ -101,14 +105,33 @@ void AppState::begin()
     weather_.configured = true;
     M5.Speaker.begin();
     M5.Speaker.mute();
+    pinMode(SPEAKER_PIN, OUTPUT);
+    digitalWrite(SPEAKER_PIN, LOW);
     copyField(weather_.location, sizeof(weather_.location), app_config::kWeatherCity);
     status_.wifi_configured = hasText(app_config::kWifiSsid);
     connectWifiIfNeeded();
     configureTimeIfNeeded();
     update();
+
+    if (!background_task_started_)
+    {
+        background_task_started_ = xTaskCreatePinnedToCore(
+                                       backgroundTask,
+                                       "app-bg",
+                                       8192,
+                                       this,
+                                       1,
+                                       nullptr,
+                                       0) == pdPASS;
+    }
 }
 
 void AppState::update()
+{
+    serviceBackground();
+}
+
+void AppState::serviceBackground()
 {
     const uint32_t now = millis();
     status_.uptime_ms = now;
@@ -124,6 +147,16 @@ void AppState::update()
     fetchBasementStatusIfDue();
     updateChargeAnimation();
     last_status_update_ms_ = millis();
+}
+
+void AppState::backgroundTask(void* context)
+{
+    AppState* state = static_cast<AppState*>(context);
+    while (state)
+    {
+        state->serviceBackground();
+        vTaskDelay(pdMS_TO_TICKS(250));
+    }
 }
 
 void AppState::updateChargeAnimation()
@@ -336,6 +369,28 @@ bool AppState::consumeChargeAnimDisplayChanged()
     return changed;
 }
 
+bool AppState::consumeAlarmDisplayChanged()
+{
+    const bool changed = alarm_display_changed_;
+    alarm_display_changed_ = false;
+    return changed;
+}
+
+bool AppState::consumeAlarmAutoDismissed()
+{
+    const bool changed = alarm_auto_dismissed_;
+    alarm_auto_dismissed_ = false;
+    return changed;
+}
+
+void AppState::consumeDisplayChangeFlags()
+{
+    battery_display_changed_ = false;
+    charge_anim_display_changed_ = false;
+    alarm_display_changed_ = false;
+    alarm_auto_dismissed_ = false;
+}
+
 bool AppState::shouldFullClear() const
 {
     return app_config::kFullClearEveryRefreshes > 0 &&
@@ -345,28 +400,53 @@ bool AppState::shouldFullClear() const
 
 void AppState::readBattery()
 {
+    const uint32_t read_start_ms = millis();
+    if (last_battery_read_ms_ != 0 && (read_start_ms - last_battery_read_ms_) < kBatteryPollIntervalMs)
+    {
+        return;
+    }
+    last_battery_read_ms_ = read_start_ms;
+
     analogSetPinAttenuation(kBatteryAdcPin, ADC_11db);
     esp_adc_cal_characteristics_t adc_chars{};
     esp_adc_cal_characterize(ADC_UNIT_1, ADC_ATTEN_DB_12, ADC_WIDTH_BIT_12, 3600, &adc_chars);
 
-    uint32_t raw_total = 0;
-    uint16_t raw_min = UINT16_MAX;
-    uint16_t raw_max = 0;
-    constexpr int samples = 16;
-    for (int i = 0; i < samples; ++i)
+    uint32_t cluster_raw_total = 0;
+    uint32_t cluster_mv_total = 0;
+    float cluster_voltage_total = 0.0f;
+
+    for (uint8_t cluster = 0; cluster < kBatteryClusterSamples; ++cluster)
     {
-        const uint16_t sample = analogRead(kBatteryAdcPin);
-        raw_total += sample;
-        raw_min = std::min(raw_min, sample);
-        raw_max = std::max(raw_max, sample);
-        delay(1);
+        uint32_t raw_total = 0;
+        uint16_t raw_min = UINT16_MAX;
+        uint16_t raw_max = 0;
+        constexpr int samples = 8;
+        for (int i = 0; i < samples; ++i)
+        {
+            const uint16_t sample = analogRead(kBatteryAdcPin);
+            raw_total += sample;
+            raw_min = std::min(raw_min, sample);
+            raw_max = std::max(raw_max, sample);
+            delay(1);
+        }
+
+        const uint32_t raw_sample = (raw_total - raw_min - raw_max) / (samples - 2);
+        const uint32_t millivolts_sample = esp_adc_cal_raw_to_voltage(raw_sample, &adc_chars);
+        cluster_raw_total += raw_sample;
+        cluster_mv_total += millivolts_sample;
+        cluster_voltage_total += static_cast<float>(millivolts_sample) * kBatteryDivider / 1000.0f;
+
+        if (cluster + 1U < kBatteryClusterSamples)
+        {
+            delay(kBatteryClusterDelayMs);
+        }
     }
 
-    const uint32_t raw = (raw_total - raw_min - raw_max) / (samples - 2);
-    const uint32_t millivolts = esp_adc_cal_raw_to_voltage(raw, &adc_chars);
+    const uint32_t raw = cluster_raw_total / kBatteryClusterSamples;
+    const uint32_t millivolts = cluster_mv_total / kBatteryClusterSamples;
     status_.battery_raw_adc = static_cast<uint16_t>(raw);
     status_.battery_adc_mv = static_cast<uint16_t>(millivolts);
-    status_.battery_voltage = static_cast<float>(millivolts) * kBatteryDivider / 1000.0f;
+    status_.battery_voltage = cluster_voltage_total / static_cast<float>(kBatteryClusterSamples);
     status_.battery_valid = false;
     status_.battery_percent = -1;
     float filtered_voltage = status_.battery_voltage;
@@ -408,7 +488,7 @@ void AppState::readBattery()
     {
         battery_voltage_sample_count_ = 0;
         battery_voltage_sample_index_ = 0;
-        displayed_battery_percent_ = -1;
+        last_forced_battery_percentage_ = -2;
         last_charge_percent_increment_ms_ = 0;
     }
     status_.battery_state = batteryStateFromPercent(status_.battery_percent);
@@ -448,79 +528,33 @@ void AppState::readBattery()
         has_voltage_sample = false;
     }
 
-    if (status_.battery_valid)
-    {
-        const int raw_battery_percent = status_.battery_percent;
-        const uint32_t now_ms = millis();
-
-        if (displayed_battery_percent_ < 0)
-        {
-            displayed_battery_percent_ = raw_battery_percent;
-            last_charge_percent_increment_ms_ = now_ms;
-        }
-        else if (status_.charging)
-        {
-            if (!was_charging)
-            {
-                // Anchor the displayed value at the unplugged percentage when USB
-                // is first detected. This prevents charger voltage from instantly
-                // pulling a dead/low pack up to an unrealistic displayed percent.
-                last_charge_percent_increment_ms_ = now_ms;
-            }
-
-            if (raw_battery_percent < displayed_battery_percent_)
-            {
-                // Downward movement is safe and should remain immediate so an
-                // unplug/drop can recover through the existing anti-bounce path.
-                displayed_battery_percent_ = raw_battery_percent;
-                last_charge_percent_increment_ms_ = now_ms;
-            }
-            else if (raw_battery_percent > displayed_battery_percent_)
-            {
-                if (last_charge_percent_increment_ms_ == 0)
-                {
-                    last_charge_percent_increment_ms_ = now_ms;
-                }
-                const uint32_t elapsed_ms = now_ms - last_charge_percent_increment_ms_;
-                const uint32_t allowed_steps = elapsed_ms / kBatteryChargePercentStepMs;
-                if (allowed_steps > 0)
-                {
-                    const int remaining = raw_battery_percent - displayed_battery_percent_;
-                    const int increment = static_cast<int>(std::min<uint32_t>(allowed_steps, static_cast<uint32_t>(remaining)));
-                    displayed_battery_percent_ += increment;
-                    last_charge_percent_increment_ms_ += static_cast<uint32_t>(increment) * kBatteryChargePercentStepMs;
-                }
-            }
-            else
-            {
-                last_charge_percent_increment_ms_ = now_ms;
-            }
-        }
-        else if (raw_battery_percent < displayed_battery_percent_)
-        {
-            displayed_battery_percent_ = raw_battery_percent;
-            last_charge_percent_increment_ms_ = 0;
-        }
-        else
-        {
-            last_charge_percent_increment_ms_ = 0;
-        }
-        status_.battery_percent = displayed_battery_percent_;
-        status_.battery_state = batteryStateFromPercent(status_.battery_percent);
-    }
+    // Keep the internal state tied to the latest averaged reading. The old
+    // displayed-percent throttle intentionally delayed upward movement while
+    // charging, but it also made unplugged discharge appear stuck until a power
+    // state transition. Redraw throttling is handled below instead.
+    last_charge_percent_increment_ms_ = status_.charging ? last_charge_percent_increment_ms_ : 0;
+    status_.battery_state = batteryStateFromPercent(status_.battery_percent);
 
     const int current_battery_percentage = status_.battery_percent;
     const bool is_charging = status_.charging;
     if (!has_battery_display_sample_)
     {
         last_battery_percentage_ = current_battery_percentage;
+        last_forced_battery_percentage_ = current_battery_percentage;
         last_charging_ = is_charging;
         has_battery_display_sample_ = true;
     }
     else if (current_battery_percentage != last_battery_percentage_ || is_charging != last_charging_)
     {
-        battery_display_changed_ = true;
+        const bool significant_battery_drop = current_battery_percentage >= 0 &&
+                                             last_forced_battery_percentage_ >= 0 &&
+                                             (last_forced_battery_percentage_ - current_battery_percentage) >= kBatteryForceRefreshThresholdPercent;
+        battery_display_changed_ = battery_display_changed_ || is_charging != last_charging_ || significant_battery_drop;
         last_battery_percentage_ = current_battery_percentage;
+        if (battery_display_changed_)
+        {
+            last_forced_battery_percentage_ = current_battery_percentage;
+        }
         last_charging_ = is_charging;
     }
 
@@ -755,6 +789,22 @@ void AppState::fetchBasementStatusIfDue(bool force)
         return;
     }
 
+    if (!was_host_connected_)
+    {
+        playConnectionChime();
+        was_host_connected_ = true;
+    }
+
+    const bool should_auto_dismiss_alarm = basement_.alarm_active || alarm_.is_alarming || alarm_.is_muted || alarm_.is_dismissed || alarm_.snoozed_until_ms != 0;
+    if (should_auto_dismiss_alarm)
+    {
+        resetAlarmState();
+        basement_.consecutive_failures = 0;
+        alarm_auto_dismissed_ = true;
+        alarm_display_changed_ = true;
+        Serial.println("BEELINK alarm auto-dismissed: HTTP 200 restored");
+    }
+
     StaticJsonDocument<3072> doc;
     doc.clear();
     const DeserializationError err = deserializeJson(doc, http.getStream());
@@ -836,6 +886,7 @@ void AppState::fetchBasementStatusIfDue(bool force)
 
 void AppState::noteBasementFailure(const char* error, int http_code)
 {
+    was_host_connected_ = false;
     basement_.online = false;
     if (basement_.consecutive_failures < 255)
     {
@@ -865,15 +916,28 @@ void AppState::noteBasementFailure(const char* error, int http_code)
 
 void AppState::setBasementOnline()
 {
+    const bool was_alarm_active = basement_.alarm_active || alarm_.is_alarming || alarm_.is_muted || alarm_.is_dismissed || alarm_.snoozed_until_ms != 0;
     basement_.online = true;
     basement_.server_status = ServerStatus::Online;
     resetAlarmState();
     basement_.consecutive_failures = 0;
     copyField(basement_.error, sizeof(basement_.error), "");
+    if (was_alarm_active)
+    {
+        alarm_auto_dismissed_ = true;
+        alarm_display_changed_ = true;
+        Serial.println("BEELINK alarm auto-dismissed: HTTP 200 restored");
+    }
 }
 
 void AppState::triggerAlarm(const char* title, const char* details)
 {
+    resetAlarmBuzzerForNewIncident();
+
+    if (page_ != Page::Alarm)
+    {
+        page_before_alarm_ = page_;
+    }
     copyField(alarm_.error_title, sizeof(alarm_.error_title), hasText(title) ? title : "ALARM");
     copyField(alarm_.error_details, sizeof(alarm_.error_details), hasText(details) ? details : "Attention required");
     alarm_.is_alarming = true;
@@ -884,12 +948,43 @@ void AppState::triggerAlarm(const char* title, const char* details)
     alarm_.next_buzzer_ms = 0;
     basement_.alarm_muted = false;
     setPage(Page::Alarm);
+    alarm_display_changed_ = true;
     Serial.printf("ALARM triggered: %s - %s\n", alarm_.error_title, alarm_.error_details);
+}
+
+void AppState::resetAlarmBuzzerForNewIncident()
+{
+    // A previous mute/dismiss/snooze path may have forced the speaker pin LOW
+    // and detached the LEDC channel. Rebuild the buzzer path for each fresh
+    // incident so the next alarm cannot inherit an unresponsive hardware state.
+    M5.Speaker.end();
+    pinMode(SPEAKER_PIN, OUTPUT);
+    digitalWrite(SPEAKER_PIN, LOW);
+    M5.Speaker.begin();
+    M5.Speaker.setVolume(2);
+}
+
+void AppState::playConnectionChime()
+{
+    M5.Speaker.end();
+    pinMode(SPEAKER_PIN, OUTPUT);
+    digitalWrite(SPEAKER_PIN, LOW);
+    M5.Speaker.begin();
+    M5.Speaker.setVolume(2);
+    M5.Speaker.tone(988, 80);
+    delay(80);
+    M5.Speaker.tone(1319, 150);
+    delay(150);
+    M5.Speaker.end();
+    pinMode(SPEAKER_PIN, OUTPUT);
+    digitalWrite(SPEAKER_PIN, LOW);
 }
 
 void AppState::silenceAlarmBuzzer()
 {
-    M5.Speaker.mute();
+    M5.Speaker.end();
+    pinMode(SPEAKER_PIN, OUTPUT);
+    digitalWrite(SPEAKER_PIN, LOW);
     alarm_.buzzer_beeps_played = 0;
     alarm_.next_buzzer_ms = 0;
 }
@@ -898,12 +993,24 @@ void AppState::resetAlarmState()
 {
     const bool was_showing_alarm = page_ == Page::Alarm;
     silenceAlarmBuzzer();
-    alarm_ = AlarmStatus{};
+
+    // Network recovery marks the end of the current offline incident. Clear
+    // every suppression flag explicitly so mute/dismiss/snooze state cannot
+    // leak into the next independent offline incident.
+    alarm_.is_muted = false;
+    alarm_.is_dismissed = false;
+    alarm_.snoozed_until_ms = 0;
+    alarm_.is_alarming = false;
+    alarm_.buzzer_beeps_played = 0;
+    alarm_.next_buzzer_ms = 0;
+    alarm_.error_title[0] = '\0';
+    alarm_.error_details[0] = '\0';
+
     basement_.alarm_muted = false;
     basement_.alarm_active = false;
     if (was_showing_alarm)
     {
-        setPage(Page::Dashboard);
+        setPage(page_before_alarm_ == Page::Alarm ? Page::Dashboard : page_before_alarm_);
     }
 }
 

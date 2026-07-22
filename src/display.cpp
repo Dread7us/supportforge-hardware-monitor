@@ -219,13 +219,27 @@ void Display::showSplash(const char* status)
 void Display::render(const AppState& state, bool force_full_clear)
 {
     const bool full_refresh = force_full_clear || state.shouldFullClear();
-    clear(full_refresh);
 
-    if (force_full_clear)
-    {
-        M5.M5Ink.clear();
-        delay(850); // Wait for the 0.85s hardware cycle to physically complete
-    }
+    // Always rebuild the UI from an explicitly white backing buffer. For a full
+    // refresh, also reset the previous-frame cache so the final push is a single
+    // full-quality panel update rather than a layered partial diff.
+    clear(full_refresh);
+    drawPage(state);
+    push(full_refresh);
+}
+
+void Display::renderManualFullRefresh(const AppState& state)
+{
+    // Manual top-button refresh must be a true hardware clear followed by one
+    // high-quality full-frame push. This prevents a queued partial update from
+    // visually "sliding" over the freshly refreshed e-paper image.
+    clear(true);
+    drawPage(state);
+    pushManualFullRefresh();
+}
+
+void Display::drawPage(const AppState& state)
+{
 
     switch (state.page())
     {
@@ -269,8 +283,6 @@ void Display::render(const AppState& state, bool force_full_clear)
         ui_pages::renderDashboard(state);
         break;
     }
-
-    push(full_refresh);
 }
 
 void Display::clear(bool full_clear)
@@ -291,6 +303,10 @@ void Display::push(bool full_refresh)
 
     if (full_refresh)
     {
+        // One high-quality full-screen push. Avoid issuing a separate panel
+        // clear here; the frame buffer has already been cleared to white before
+        // drawing, and an extra clear cycle can make a bounced manual refresh
+        // look like a thick/double-drawn e-paper image.
         M5.M5Ink.drawBuff(frame_buffer, true);
     }
     else
@@ -301,6 +317,35 @@ void Display::push(bool full_refresh)
         }
         M5.M5Ink.setDrawAddr(0, 0, app_config::kScreenWidth, app_config::kScreenHeight);
         M5.M5Ink.drawBuff(last_frame_buffer, frame_buffer, sizeof(frame_buffer));
+    }
+    memcpy(last_frame_buffer, frame_buffer, sizeof(last_frame_buffer));
+}
+
+void Display::pushManualFullRefresh()
+{
+    if (!sprite_ready)
+    {
+        return;
+    }
+
+    // Force the panel through the library's true black/white clear cycle first;
+    // clear() waits for the hardware internally, and the explicit busy waits are
+    // a defensive guard for boards/library revisions that return early.
+    M5.M5Ink.clear(INK_CLENR_MODE0);
+    while (M5.M5Ink.isBusy())
+    {
+        delay(10);
+    }
+
+    if (M5.M5Ink.getMode() != INK_FULL_MODE)
+    {
+        M5.M5Ink.switchMode(INK_FULL_MODE);
+    }
+
+    M5.M5Ink.drawBuff(frame_buffer, true);
+    while (M5.M5Ink.isBusy())
+    {
+        delay(10);
     }
     memcpy(last_frame_buffer, frame_buffer, sizeof(last_frame_buffer));
 }

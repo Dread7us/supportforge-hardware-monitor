@@ -12,9 +12,12 @@ AppState app;
 ButtonController buttons;
 Display display;
 
+constexpr uint32_t kManualFullRefreshCooldownMs = 2500U;
 uint32_t last_render_ms = 0;
+uint32_t last_full_refresh_ms = 0;
 bool force_render = true;
 bool force_full_clear = true;
+bool manual_full_refresh_requested = false;
 
 uint32_t refreshIntervalFor(Page page)
 {
@@ -52,8 +55,7 @@ bool handleRefreshButton(ButtonEvent event)
 
     if (event == ButtonEvent::FullRefresh)
     {
-        force_render = true;
-        force_full_clear = true;
+        manual_full_refresh_requested = true;
         return true;
     }
 
@@ -280,11 +282,52 @@ void loop()
 {
     const ButtonEvent event = buttons.poll();
     handleButton(event);
+
+    if (manual_full_refresh_requested)
+    {
+        // Drain any redraw requests that the background task queued before the
+        // button press, then do the manual hardware clear + GC/full push, then
+        // drain again in case the background task finished while the panel was
+        // busy. This keeps the next loop from immediately drawing over it.
+        app.consumeDisplayChangeFlags();
+        display.renderManualFullRefresh(app);
+        app.consumeDisplayChangeFlags();
+        app.noteRefresh();
+        last_render_ms = millis();
+        last_full_refresh_ms = last_render_ms;
+        force_render = false;
+        force_full_clear = false;
+        manual_full_refresh_requested = false;
+        delay(20);
+        return;
+    }
+
     app.updateServerAlarm();
 
     const uint32_t now = millis();
     const uint32_t interval = refreshIntervalFor(app.page());
+    const bool in_full_refresh_cooldown = (last_full_refresh_ms != 0) &&
+                                         ((now - last_full_refresh_ms) < kManualFullRefreshCooldownMs);
     app.updateChargeAnimation();
+    if (in_full_refresh_cooldown)
+    {
+        app.consumeDisplayChangeFlags();
+        force_render = false;
+        force_full_clear = false;
+        delay(20);
+        return;
+    }
+
+    if (app.consumeAlarmDisplayChanged())
+    {
+        force_render = true;
+        force_full_clear = true;
+    }
+    if (app.consumeAlarmAutoDismissed())
+    {
+        force_render = true;
+        force_full_clear = false;
+    }
     if (app.consumeChargeAnimDisplayChanged())
     {
         force_render = true;
@@ -298,7 +341,6 @@ void loop()
 
     if (force_render)
     {
-        app.update();
         if (app.consumeChargeAnimDisplayChanged())
         {
             force_full_clear = false;

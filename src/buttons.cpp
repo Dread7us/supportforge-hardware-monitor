@@ -6,7 +6,8 @@
 
 void ButtonController::begin()
 {
-    last_event_ms_ = millis();
+    last_event_ms_ = 0;
+    button_lockout_ = false;
 }
 
 ButtonEvent ButtonController::poll()
@@ -14,10 +15,11 @@ ButtonEvent ButtonController::poll()
     M5.update();
 
     const uint32_t now = millis();
-    if ((now - last_event_ms_) < app_config::kDebounceMs)
-    {
-        return ButtonEvent::None;
-    }
+    const bool any_button_down = M5.BtnUP.isPressed() ||
+                                 M5.BtnDOWN.isPressed() ||
+                                 M5.BtnMID.isPressed() ||
+                                 M5.BtnPWR.isPressed() ||
+                                 M5.BtnEXT.isPressed();
 
     ButtonEvent event = ButtonEvent::None;
 
@@ -42,10 +44,21 @@ ButtonEvent ButtonController::poll()
         event = ButtonEvent::FullRefresh;
     }
 
-    if (event != ButtonEvent::None)
+    if (button_lockout_)
     {
-        last_event_ms_ = now;
+        if (!any_button_down && (now - last_event_ms_) >= app_config::kDebounceMs)
+        {
+            button_lockout_ = false;
+        }
+        return ButtonEvent::None;
     }
 
-    return event;
+    if (event != ButtonEvent::None && (now - last_event_ms_) >= app_config::kDebounceMs)
+    {
+        last_event_ms_ = now;
+        button_lockout_ = true;
+        return event;
+    }
+
+    return ButtonEvent::None;
 }

@@ -21,4 +21,5 @@ class ButtonController
 
   private:
     uint32_t last_event_ms_ = 0;
+    bool button_lockout_ = false;
 };
