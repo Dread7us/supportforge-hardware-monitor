@@ -10,7 +10,7 @@ constexpr const char* kAppName = "supportFORGE";
 constexpr const char* kVersion = "1.0.1";
 
 #ifndef COREINK_TARGET_HOST_NAME
-#define COREINK_TARGET_HOST_NAME "Host"
+#define COREINK_TARGET_HOST_NAME kAppName
 #endif
 
 #ifndef COREINK_NTP_SERVER

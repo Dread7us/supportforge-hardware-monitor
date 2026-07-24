@@ -1,5 +1,6 @@
 #pragma once
 
+#include <ArduinoJson.h>
 #include <Arduino.h>
 #include <Preferences.h>
 #include <cstdint>
@@ -19,6 +20,7 @@ enum class Page : uint8_t
     BeelinkMemDetail,
     BeelinkTempDetail,
     BeelinkUptimeDetail,
+    BeelinkSpeedTestDetail,
 };
 
 enum class BatteryState : uint8_t
@@ -132,6 +134,21 @@ struct BasementStatus
     float memory_total = 0.0f;
     uint8_t beelink_cursor = 0;
 
+    struct SpeedTestStatus
+    {
+        bool has_result = false;
+        bool is_running = false;
+        bool trigger_pending = false;
+        int http_code = 0;
+        float download_mbps = 0.0f;
+        float upload_mbps = 0.0f;
+        float ping_ms = 0.0f;
+        char last_run[32] = "";
+        char last_run_short[8] = "";
+        char error[40] = "";
+        uint8_t anim_phase = 0;
+    } speedtest{};
+
     struct DiskStatus
     {
         char mount[16] = "";
@@ -179,6 +196,7 @@ class AppState
     void setPage(Page page);
     void noteRefresh();
     void forceNetworkRefresh();
+    bool triggerSpeedTest();
     void toggleServerAlarmMuteIfOffline();
     void updateServerAlarm();
     void muteAlarm();
@@ -197,6 +215,7 @@ class AppState
     bool consumeChargeAnimDisplayChanged();
     bool consumeAlarmDisplayChanged();
     bool consumeAlarmAutoDismissed();
+    bool consumeSpeedTestDisplayChanged();
     void consumeDisplayChangeFlags();
 
     bool shouldFullClear() const;
@@ -210,12 +229,15 @@ class AppState
     void readWireless();
     void scanWifiIfDue(bool force = false);
     void fetchBasementStatusIfDue(bool force = false);
+    void parseSpeedTest(JsonVariantConst speedtest);
+    void updateSpeedTestPolling(uint32_t now);
     void fetchWeatherIfDue(bool force = false);
     void noteBasementFailure(const char* error, int http_code = 0);
     void setBasementOnline();
     void triggerAlarm(const char* title, const char* details);
     void resetAlarmBuzzerForNewIncident();
     void playConnectionChime();
+    void playMarioCoinChime();
     void silenceAlarmBuzzer();
     void resetAlarmState();
     void updateBeelinkTempFormats();
@@ -247,6 +269,10 @@ class AppState
     bool charge_anim_display_changed_ = false;
     bool alarm_display_changed_ = false;
     bool alarm_auto_dismissed_ = false;
+    bool speedtest_display_changed_ = false;
+    bool speedtest_was_running_ = false;
+    uint32_t last_speedtest_poll_ms_ = 0;
+    uint32_t last_speedtest_anim_ms_ = 0;
     bool background_task_started_ = false;
     bool was_host_connected_ = false;
     unsigned long last_anim_toggle_ = 0;

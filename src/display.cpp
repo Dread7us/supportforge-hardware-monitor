@@ -273,6 +273,9 @@ void Display::drawPage(const AppState& state)
     case Page::BeelinkUptimeDetail:
         ui_pages::renderBeelinkUptimeDetail(state);
         break;
+    case Page::BeelinkSpeedTestDetail:
+        ui_pages::renderBeelinkSpeedTestDetail(state);
+        break;
     case Page::System:
         ui_pages::renderSystem(state);
         break;
@@ -303,11 +306,26 @@ void Display::push(bool full_refresh)
 
     if (full_refresh)
     {
-        // One high-quality full-screen push. Avoid issuing a separate panel
-        // clear here; the frame buffer has already been cleared to white before
-        // drawing, and an extra clear cycle can make a bounced manual refresh
-        // look like a thick/double-drawn e-paper image.
+        // E-paper anti-ghosting rule: a logical full refresh must be a true
+        // hardware clear cycle followed by a full-mode buffer push. This is
+        // intentionally heavier than a partial diff so page/modal transitions
+        // cannot stack old ink under the newly rendered frame.
+        M5.M5Ink.clear(INK_CLENR_MODE0);
+        while (M5.M5Ink.isBusy())
+        {
+            delay(10);
+        }
+
+        if (M5.M5Ink.getMode() != INK_FULL_MODE)
+        {
+            M5.M5Ink.switchMode(INK_FULL_MODE);
+        }
+
         M5.M5Ink.drawBuff(frame_buffer, true);
+        while (M5.M5Ink.isBusy())
+        {
+            delay(10);
+        }
     }
     else
     {

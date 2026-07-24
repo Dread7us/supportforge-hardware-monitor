@@ -623,6 +623,52 @@ void metricBox(int x, int y, int w, const char* label, const char* value)
     drawTextCentered(x + (w / 2), y + 18, value, coreink_gfx::Font::Small, w - 4);
 }
 
+void speedSummary(const BasementStatus& b, char* out, size_t out_len)
+{
+    if (!out || out_len == 0)
+    {
+        return;
+    }
+    const BasementStatus::SpeedTestStatus& spd = b.speedtest;
+    if (spd.is_running)
+    {
+        snprintf(out, out_len, "Spd: RUNNING");
+    }
+    else if (spd.has_result)
+    {
+        snprintf(out,
+                 out_len,
+                 "Spd: %.0fD / %.0fU",
+                 static_cast<double>(spd.download_mbps),
+                 static_cast<double>(spd.upload_mbps));
+    }
+    else
+    {
+        snprintf(out, out_len, "Spd: ---");
+    }
+}
+
+void drawSpeedTestAnimation(int x, int y, int w, uint8_t phase)
+{
+    // Dynamic e-paper content must blank its complete old bounding box before
+    // drawing the next frame, otherwise repeated partial updates accumulate ink.
+    coreink_gfx::fillRect(x, y, w, 18, false);
+    coreink_gfx::drawRect(x, y, w, 18);
+    const int segment_w = (w - 8) / 4;
+    for (uint8_t i = 0; i < 4; ++i)
+    {
+        const int sx = x + 4 + (i * segment_w);
+        if (i == phase)
+        {
+            coreink_gfx::fillRect(sx, y + 4, segment_w - 3, 10, true);
+        }
+        else
+        {
+            coreink_gfx::drawRect(sx, y + 4, segment_w - 3, 10);
+        }
+    }
+}
+
 void footerNav(const char* left, const char* right = nullptr)
 {
     const int y = app_config::kScreenHeight - ui_theme::kFooterHeight;
@@ -799,8 +845,16 @@ void renderBeelink(const AppState& state)
         snprintf(status_title, sizeof(status_title), "%s", b.alarm_muted ? "OFFLINE MUTED" : "OFFLINE ALARM");
     }
     panel(10, 30, 180, 44, status_title);
-    drawTextCentered(100, 48, b.has_host ? b.host : "missing host", coreink_gfx::Font::Small, 160);
-    drawTextCentered(100, 62, b.has_service ? b.service : "missing service", coreink_gfx::Font::Small, 160);
+    // These short summary lines are dynamic e-paper content. Blank their full
+    // text band before drawing so stale glyph pixels from prior values do not
+    // show up as underscores/artifacts after partial refreshes.
+    coreink_gfx::fillRect(14, 47, 172, 24, false);
+    char host_line[40] = {};
+    snprintf(host_line, sizeof(host_line), "Host: %s", b.has_host ? b.host : "missing");
+    drawTextCentered(100, 48, host_line, coreink_gfx::Font::Small, 160);
+    char spd_line[36] = {};
+    speedSummary(b, spd_line, sizeof(spd_line));
+    drawTextCentered(100, 62, spd_line, coreink_gfx::Font::Small, 160);
 
     selectableMetricRow(10, 78, 180, "CPU", b.online && b.has_cpu ? b.cpu : "--", b.beelink_cursor == 0);
     selectableMetricRow(10, 99, 180, "RAM", b.online && b.has_memory ? b.memory : "--", b.beelink_cursor == 1);
@@ -809,7 +863,8 @@ void renderBeelink(const AppState& state)
 
     char interval[24] = {};
     snprintf(interval, sizeof(interval), "%s", refreshIntervalText(state.refresh_interval_ms));
-    selectableMetricRow(10, 162, 180, "INT", interval, b.beelink_cursor == 4);
+    selectableMetricRow(10, 162, 86, "SPD", b.speedtest.is_running ? "RUN" : (b.speedtest.has_result ? "VIEW" : "---"), b.beelink_cursor == 4);
+    selectableMetricRow(104, 162, 86, "INT", interval, b.beelink_cursor == 5);
 
     footerNav("MID select", "UP/DOWN move");
 }
@@ -917,6 +972,41 @@ void renderBeelinkUptimeDetail(const AppState& state)
     labelValueRow(18, 90, 164, "M5", m5_uptime);
 
     footerNav("ANY button", "BACK");
+}
+
+void renderBeelinkSpeedTestDetail(const AppState& state)
+{
+    header("SPEED TEST", state);
+
+    const BasementStatus::SpeedTestStatus& spd = state.basement().speedtest;
+    // Full page renders already start from a white backing buffer, but this
+    // fixed content area can also be updated through partial refreshes while a
+    // speed test is running. Keep an explicit white bounding box around all
+    // dynamic status/result/animation text before any new text is drawn.
+    coreink_gfx::fillRect(11, 49, 178, 86, false);
+    panel(10, 32, 180, 130, spd.is_running ? "RUNNING" : "LAST RESULT");
+    if (spd.is_running)
+    {
+        drawTextCentered(100, 54, "Testing connection", coreink_gfx::Font::Small, 160);
+        drawSpeedTestAnimation(24, 76, 152, spd.anim_phase);
+        drawTextCentered(100, 104, "Polling every 2 sec", coreink_gfx::Font::Small, 160);
+    }
+    else if (spd.has_result)
+    {
+        labelValueRow(18, 54, 164, "Last", spd.last_run[0] ? spd.last_run : "--");
+        labelValueRowf(18, 74, 164, "Down", "%.0f Mbps", static_cast<double>(spd.download_mbps));
+        labelValueRowf(18, 94, 164, "Up", "%.0f Mbps", static_cast<double>(spd.upload_mbps));
+        labelValueRowf(18, 114, 164, "Ping", "%.0f ms", static_cast<double>(spd.ping_ms));
+    }
+    else
+    {
+        drawTextCentered(100, 70, "No speed test yet", coreink_gfx::Font::Small, 160);
+        drawTextCentered(100, 92, spd.error[0] ? spd.error : "Press MID to start", coreink_gfx::Font::Small, 160);
+    }
+
+    coreink_gfx::drawRect(34, 136, 132, 18);
+    drawTextCentered(100, 137, "[Run Test]", coreink_gfx::Font::Small, 124);
+    footerNav("MID run", "UP/DOWN back");
 }
 
 void renderSystem(const AppState& state)

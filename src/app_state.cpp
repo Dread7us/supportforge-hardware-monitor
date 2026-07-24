@@ -6,6 +6,7 @@
 #include <M5CoreInk.h>
 #include <WiFi.h>
 #include <algorithm>
+#include <cstring>
 #include <ctime>
 #include <esp_adc_cal.h>
 
@@ -30,6 +31,8 @@ constexpr uint32_t kBatteryPollIntervalMs = 60000U;
 constexpr uint8_t kBatteryClusterSamples = 5;
 constexpr uint32_t kBatteryClusterDelayMs = 10U;
 constexpr int kBatteryForceRefreshThresholdPercent = 5;
+constexpr uint32_t kSpeedTestPollMs = 2000U;
+constexpr uint32_t kSpeedTestAnimMs = 700U;
 
 bool hasText(const char* value)
 {
@@ -92,6 +95,76 @@ void copyField(char* dest, size_t len, const char* value)
     snprintf(dest, len, "%s", value);
 }
 
+float firstFloat(JsonVariantConst json, const char* a, const char* b, const char* c = nullptr)
+{
+    if (a && !json[a].isNull()) return json[a].as<float>();
+    if (b && !json[b].isNull()) return json[b].as<float>();
+    if (c && !json[c].isNull()) return json[c].as<float>();
+    return 0.0f;
+}
+
+bool firstBool(JsonVariantConst json, const char* a, const char* b = nullptr)
+{
+    if (a && !json[a].isNull()) return json[a].as<bool>();
+    if (b && !json[b].isNull()) return json[b].as<bool>();
+    return false;
+}
+
+const char* firstText(JsonVariantConst json, const char* a, const char* b = nullptr, const char* c = nullptr)
+{
+    if (a && json[a].is<const char*>()) return json[a].as<const char*>();
+    if (b && json[b].is<const char*>()) return json[b].as<const char*>();
+    if (c && json[c].is<const char*>()) return json[c].as<const char*>();
+    return "";
+}
+
+void formatSpeedTestShortDate(const char* last_run, char* out, size_t out_len)
+{
+    if (!out || out_len == 0)
+    {
+        return;
+    }
+    if (!hasText(last_run))
+    {
+        snprintf(out, out_len, "--/--");
+        return;
+    }
+
+    int year = 0;
+    int month = 0;
+    int day = 0;
+    if (sscanf(last_run, "%d-%d-%d", &year, &month, &day) == 3 && month >= 1 && month <= 12 && day >= 1 && day <= 31)
+    {
+        snprintf(out, out_len, "%02d/%02d", month, day);
+        return;
+    }
+
+    snprintf(out, out_len, "%.*s", static_cast<int>(out_len - 1), last_run);
+}
+
+void speedTestEndpoint(char* out, size_t out_len)
+{
+    if (!out || out_len == 0)
+    {
+        return;
+    }
+    char base[220] = {};
+    snprintf(base, sizeof(base), "%s", app_config::kBeelinkLhmUrl);
+    char* query = strchr(base, '?');
+    if (query)
+    {
+        *query = '\0';
+    }
+    char* telemetry = strstr(base, "/telemetry");
+    if (telemetry)
+    {
+        telemetry[1] = '\0';
+        snprintf(out, out_len, "%sspeedtest?token=%s", base, app_config::kAuthToken);
+        return;
+    }
+    snprintf(out, out_len, "%s/speedtest?token=%s", base, app_config::kAuthToken);
+}
+
 } // namespace
 
 void AppState::begin()
@@ -145,6 +218,7 @@ void AppState::serviceBackground()
     readTime();
     fetchWeatherIfDue();
     fetchBasementStatusIfDue();
+    updateSpeedTestPolling(now);
     updateChargeAnimation();
     last_status_update_ms_ = millis();
 }
@@ -206,6 +280,51 @@ void AppState::forceNetworkRefresh()
     scanWifiIfDue(true);
     fetchWeatherIfDue(true);
     fetchBasementStatusIfDue(true);
+}
+
+bool AppState::triggerSpeedTest()
+{
+    basement_.configured = hasText(app_config::kBeelinkLhmUrl);
+    if (!basement_.configured || WiFi.status() != WL_CONNECTED)
+    {
+        copyField(basement_.speedtest.error, sizeof(basement_.speedtest.error), basement_.configured ? "wifi offline" : "endpoint not set");
+        speedtest_display_changed_ = true;
+        return false;
+    }
+
+    char url[260] = {};
+    speedTestEndpoint(url, sizeof(url));
+    HTTPClient http;
+    http.setTimeout(app_config::kHttpTimeoutMs);
+    if (!http.begin(url))
+    {
+        copyField(basement_.speedtest.error, sizeof(basement_.speedtest.error), "HTTP begin failed");
+        speedtest_display_changed_ = true;
+        return false;
+    }
+    http.addHeader("x-guardian-telemetry-token", app_config::kAuthToken);
+    basement_.speedtest.http_code = http.POST("");
+    http.end();
+
+    if (basement_.speedtest.http_code < 200 || basement_.speedtest.http_code >= 300)
+    {
+        snprintf(basement_.speedtest.error, sizeof(basement_.speedtest.error), "HTTP %d", basement_.speedtest.http_code);
+        Serial.printf("SPEEDTEST trigger failed: HTTP %d\n", basement_.speedtest.http_code);
+        speedtest_display_changed_ = true;
+        return false;
+    }
+
+    basement_.speedtest.is_running = true;
+    basement_.speedtest.trigger_pending = false;
+    basement_.speedtest.anim_phase = 0;
+    basement_.speedtest.error[0] = '\0';
+    speedtest_was_running_ = true;
+    last_speedtest_poll_ms_ = 0;
+    last_speedtest_anim_ms_ = 0;
+    speedtest_display_changed_ = true;
+    fetchBasementStatusIfDue(true);
+    Serial.printf("SPEEDTEST triggered: HTTP %d\n", basement_.speedtest.http_code);
+    return true;
 }
 
 void AppState::toggleServerAlarmMuteIfOffline()
@@ -383,12 +502,20 @@ bool AppState::consumeAlarmAutoDismissed()
     return changed;
 }
 
+bool AppState::consumeSpeedTestDisplayChanged()
+{
+    const bool changed = speedtest_display_changed_;
+    speedtest_display_changed_ = false;
+    return changed;
+}
+
 void AppState::consumeDisplayChangeFlags()
 {
     battery_display_changed_ = false;
     charge_anim_display_changed_ = false;
     alarm_display_changed_ = false;
     alarm_auto_dismissed_ = false;
+    speedtest_display_changed_ = false;
 }
 
 bool AppState::shouldFullClear() const
@@ -829,6 +956,7 @@ void AppState::fetchBasementStatusIfDue(bool force)
     basement_.cpu_load = doc["cpu_load"].as<float>();
     basement_.memory_used = doc["ram_used_gb"].as<float>();
     basement_.memory_total = doc["ram_total_gb"].as<float>();
+    parseSpeedTest(doc["speedtest"]);
 
     basement_.disk_count = 0;
     for (uint8_t i = 0; i < BasementStatus::kMaxDisks; ++i)
@@ -862,10 +990,20 @@ void AppState::fetchBasementStatusIfDue(bool force)
              uptime_hours,
              uptime_minutes);
 
-    basement_.has_host = true;
+    const char* telemetry_host = firstText(doc, "hostname", "host", "device_name");
+    if (!hasText(telemetry_host))
+    {
+        telemetry_host = firstText(doc, "deviceName", "name", "machine");
+    }
+    if (!hasText(telemetry_host))
+    {
+        telemetry_host = app_config::kTargetHostName;
+    }
+
+    basement_.has_host = hasText(telemetry_host);
     basement_.has_service = true;
     basement_.has_summary = true;
-    copyField(basement_.host, sizeof(basement_.host), app_config::kTargetHostName);
+    copyField(basement_.host, sizeof(basement_.host), telemetry_host);
     copyField(basement_.service, sizeof(basement_.service), app_config::kAppName);
     copyField(basement_.summary, sizeof(basement_.summary), app_config::kAppName);
     basement_.has_cpu = true;
@@ -882,6 +1020,72 @@ void AppState::fetchBasementStatusIfDue(bool force)
                   basement_.memory,
                   basement_.disk,
                   basement_.uptime);
+}
+
+void AppState::parseSpeedTest(JsonVariantConst speedtest)
+{
+    const bool was_running = basement_.speedtest.is_running;
+    if (speedtest.isNull())
+    {
+        basement_.speedtest.is_running = false;
+        basement_.speedtest.trigger_pending = false;
+        if (was_running)
+        {
+            speedtest_display_changed_ = true;
+        }
+        return;
+    }
+
+    basement_.speedtest.is_running = firstBool(speedtest, "is_running", "running");
+    basement_.speedtest.download_mbps = speedtest["down"].as<float>();
+    basement_.speedtest.upload_mbps = speedtest["up"].as<float>();
+    basement_.speedtest.ping_ms = firstFloat(speedtest, "ping_ms", "pingMs", "ping");
+
+    const char* last_run = firstText(speedtest, "last_run", "lastRun", "timestamp");
+    if (!hasText(last_run))
+    {
+        last_run = firstText(speedtest, "last_run_at", "completed_at", "created_at");
+    }
+    copyField(basement_.speedtest.last_run, sizeof(basement_.speedtest.last_run), last_run);
+    formatSpeedTestShortDate(basement_.speedtest.last_run, basement_.speedtest.last_run_short, sizeof(basement_.speedtest.last_run_short));
+
+    const bool has_metrics = basement_.speedtest.download_mbps > 0.0f || basement_.speedtest.upload_mbps > 0.0f || basement_.speedtest.ping_ms > 0.0f;
+    basement_.speedtest.has_result = has_metrics || hasText(basement_.speedtest.last_run);
+    if (basement_.speedtest.has_result || basement_.speedtest.is_running)
+    {
+        basement_.speedtest.error[0] = '\0';
+    }
+
+    if (was_running != basement_.speedtest.is_running)
+    {
+        speedtest_display_changed_ = true;
+    }
+    if (was_running && !basement_.speedtest.is_running)
+    {
+        speedtest_was_running_ = false;
+        playMarioCoinChime();
+    }
+}
+
+void AppState::updateSpeedTestPolling(uint32_t now)
+{
+    if (!basement_.speedtest.is_running)
+    {
+        return;
+    }
+
+    if (last_speedtest_anim_ms_ == 0 || (now - last_speedtest_anim_ms_) >= kSpeedTestAnimMs)
+    {
+        basement_.speedtest.anim_phase = static_cast<uint8_t>((basement_.speedtest.anim_phase + 1U) % 4U);
+        last_speedtest_anim_ms_ = now;
+        speedtest_display_changed_ = true;
+    }
+
+    if (last_speedtest_poll_ms_ == 0 || (now - last_speedtest_poll_ms_) >= kSpeedTestPollMs)
+    {
+        last_speedtest_poll_ms_ = now;
+        fetchBasementStatusIfDue(true);
+    }
 }
 
 void AppState::noteBasementFailure(const char* error, int http_code)
@@ -975,6 +1179,22 @@ void AppState::playConnectionChime()
     delay(80);
     M5.Speaker.tone(1319, 150);
     delay(150);
+    M5.Speaker.end();
+    pinMode(SPEAKER_PIN, OUTPUT);
+    digitalWrite(SPEAKER_PIN, LOW);
+}
+
+void AppState::playMarioCoinChime()
+{
+    M5.Speaker.end();
+    pinMode(SPEAKER_PIN, OUTPUT);
+    digitalWrite(SPEAKER_PIN, LOW);
+    M5.Speaker.begin();
+    M5.Speaker.setVolume(2);
+    M5.Speaker.tone(1319, 70);
+    delay(75);
+    M5.Speaker.tone(1760, 90);
+    delay(100);
     M5.Speaker.end();
     pinMode(SPEAKER_PIN, OUTPUT);
     digitalWrite(SPEAKER_PIN, LOW);
