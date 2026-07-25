@@ -45,6 +45,19 @@ enum class ServerStatus : uint8_t
     Online,
 };
 
+enum class SupportForgeDiagState : uint8_t
+{
+    NotConfigured = 0,
+    WifiDisconnected,
+    DnsFailure,
+    TcpConnectionFailure,
+    HttpResponseError,
+    InvalidContent,
+    HostMissing,
+    TargetOffline,
+    Online,
+};
+
 struct DeviceStatus
 {
     uint32_t uptime_ms = 0;
@@ -106,6 +119,11 @@ struct BasementStatus
     int http_code = 0;
     uint32_t last_attempt_ms = 0;
     uint32_t last_success_ms = 0;
+    SupportForgeDiagState diag_state = SupportForgeDiagState::NotConfigured;
+    uint8_t active_endpoint = 0;
+    char active_url[96] = "";
+    char resolved_ip[16] = "";
+    char diagnostic[64] = "not fetched";
     bool has_host = false;
     bool has_service = false;
     bool has_summary = false;
@@ -229,7 +247,9 @@ class AppState
     void readWireless();
     void scanWifiIfDue(bool force = false);
     void fetchBasementStatusIfDue(bool force = false);
-    void parseSpeedTest(JsonVariantConst speedtest);
+    bool requestSupportForge(const char* telemetry_url, const char* method, String* response, int& http_code, bool& connection_level_failure);
+    bool requestSupportForgeWithFailover(const char* method, bool speedtest, String* response, int& http_code);
+    bool parseSpeedTest(JsonVariantConst speedtest);
     void updateSpeedTestPolling(uint32_t now);
     void fetchWeatherIfDue(bool force = false);
     void noteBasementFailure(const char* error, int http_code = 0);
@@ -271,6 +291,12 @@ class AppState
     bool alarm_auto_dismissed_ = false;
     bool speedtest_display_changed_ = false;
     bool speedtest_was_running_ = false;
+    bool speedtest_result_tracking_initialized_ = false;
+    bool speedtest_completion_pending_ = false;
+    uint32_t speedtest_pending_since_ms_ = 0;
+    char speedtest_pending_baseline_[32] = "";
+    char speedtest_last_seen_completion_[32] = "";
+    char speedtest_last_chimed_completion_[32] = "";
     uint32_t last_speedtest_poll_ms_ = 0;
     uint32_t last_speedtest_anim_ms_ = 0;
     bool background_task_started_ = false;
@@ -281,5 +307,7 @@ class AppState
     uint32_t last_wifi_scan_ms_ = 0;
     uint32_t last_time_sync_attempt_ms_ = 0;
     uint32_t last_battery_read_ms_ = 0;
+    uint8_t supportforge_preferred_endpoint_ = 0;
+    uint32_t last_supportforge_primary_retry_ms_ = 0;
     bool time_configured_ = false;
 };

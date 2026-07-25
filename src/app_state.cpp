@@ -33,6 +33,7 @@ constexpr uint32_t kBatteryClusterDelayMs = 10U;
 constexpr int kBatteryForceRefreshThresholdPercent = 5;
 constexpr uint32_t kSpeedTestPollMs = 2000U;
 constexpr uint32_t kSpeedTestAnimMs = 700U;
+constexpr uint32_t kSpeedTestPendingTimeoutMs = 120000U;
 
 bool hasText(const char* value)
 {
@@ -142,14 +143,104 @@ void formatSpeedTestShortDate(const char* last_run, char* out, size_t out_len)
     snprintf(out, out_len, "%.*s", static_cast<int>(out_len - 1), last_run);
 }
 
-void speedTestEndpoint(char* out, size_t out_len)
+bool configuredEndpoint(uint8_t index, const char*& url)
+{
+    url = index == 0 ? app_config::kBeelinkLhmUrl : app_config::kBeelinkLhmFallbackUrl;
+    return hasText(url);
+}
+
+uint8_t configuredEndpointCount()
+{
+    uint8_t count = hasText(app_config::kBeelinkLhmUrl) ? 1 : 0;
+    if (hasText(app_config::kBeelinkLhmFallbackUrl))
+    {
+        ++count;
+    }
+    return count;
+}
+
+bool parseHttpUrl(const char* url, char* host, size_t host_len, uint16_t& port)
+{
+    if (!hasText(url) || !host || host_len == 0)
+    {
+        return false;
+    }
+
+    const char* scheme = strstr(url, "://");
+    if (!scheme)
+    {
+        return false;
+    }
+    const bool https = strncmp(url, "https://", 8) == 0;
+    const bool http = strncmp(url, "http://", 7) == 0;
+    if (!http && !https)
+    {
+        return false;
+    }
+
+    const char* authority = scheme + 3;
+    const char* path = strchr(authority, '/');
+    const char* end = path ? path : (url + strlen(url));
+    const char* colon = nullptr;
+    for (const char* p = authority; p < end; ++p)
+    {
+        if (*p == ':')
+        {
+            colon = p;
+            break;
+        }
+    }
+    const char* host_end = colon ? colon : end;
+    const size_t len = static_cast<size_t>(host_end - authority);
+    if (len == 0 || len >= host_len)
+    {
+        return false;
+    }
+    snprintf(host, host_len, "%.*s", static_cast<int>(len), authority);
+    port = https ? 443 : 80;
+    if (colon && (colon + 1) < end)
+    {
+        port = static_cast<uint16_t>(atoi(colon + 1));
+    }
+    return port != 0;
+}
+
+void redactTokenQuery(char* url, size_t len)
+{
+    if (!url || len == 0)
+    {
+        return;
+    }
+    char* token = strstr(url, "token=");
+    if (token)
+    {
+        token += 6;
+        const size_t prefix_len = static_cast<size_t>(token - url);
+        if (prefix_len < len)
+        {
+            snprintf(token, len - prefix_len, "<redacted>");
+        }
+    }
+}
+
+void copyUrlForDiagnostics(char* dest, size_t len, const char* url)
+{
+    if (!dest || len == 0)
+    {
+        return;
+    }
+    snprintf(dest, len, "%s", hasText(url) ? url : "");
+    redactTokenQuery(dest, len);
+}
+
+void speedTestEndpointFromTelemetry(const char* telemetry_url, char* out, size_t out_len)
 {
     if (!out || out_len == 0)
     {
         return;
     }
     char base[220] = {};
-    snprintf(base, sizeof(base), "%s", app_config::kBeelinkLhmUrl);
+    snprintf(base, sizeof(base), "%s", telemetry_url ? telemetry_url : "");
     char* query = strchr(base, '?');
     if (query)
     {
@@ -174,7 +265,7 @@ void AppState::begin()
     dash_is_f_ = preferences.getBool("dash_is_f", true);
     is_24h_ = preferences.getBool("is_24h", false);
     refresh_interval_ms = sanitizeRefreshInterval(preferences.getUInt("refresh_ms", app_config::kDefaultRefreshIntervalMs));
-    basement_.configured = hasText(app_config::kBeelinkLhmUrl);
+    basement_.configured = configuredEndpointCount() > 0;
     weather_.configured = true;
     M5.Speaker.begin();
     M5.Speaker.mute();
@@ -284,36 +375,41 @@ void AppState::forceNetworkRefresh()
 
 bool AppState::triggerSpeedTest()
 {
-    basement_.configured = hasText(app_config::kBeelinkLhmUrl);
+    const uint32_t now = millis();
+    basement_.configured = configuredEndpointCount() > 0;
     if (!basement_.configured || WiFi.status() != WL_CONNECTED)
     {
         copyField(basement_.speedtest.error, sizeof(basement_.speedtest.error), basement_.configured ? "wifi offline" : "endpoint not set");
+        speedtest_completion_pending_ = false;
         speedtest_display_changed_ = true;
         return false;
     }
 
-    char url[260] = {};
-    speedTestEndpoint(url, sizeof(url));
-    HTTPClient http;
-    http.setTimeout(app_config::kHttpTimeoutMs);
-    if (!http.begin(url))
-    {
-        copyField(basement_.speedtest.error, sizeof(basement_.speedtest.error), "HTTP begin failed");
-        speedtest_display_changed_ = true;
-        return false;
-    }
-    http.addHeader("x-guardian-telemetry-token", app_config::kAuthToken);
-    basement_.speedtest.http_code = http.POST("");
-    http.end();
+    String response;
+    int http_code = 0;
+    const bool ok = requestSupportForgeWithFailover("POST", true, &response, http_code);
+    basement_.speedtest.http_code = http_code;
 
-    if (basement_.speedtest.http_code < 200 || basement_.speedtest.http_code >= 300)
+    if (!ok || basement_.speedtest.http_code < 200 || basement_.speedtest.http_code >= 300)
     {
-        snprintf(basement_.speedtest.error, sizeof(basement_.speedtest.error), "HTTP %d", basement_.speedtest.http_code);
+        if (basement_.speedtest.http_code < 0)
+        {
+            const String desc = HTTPClient::errorToString(basement_.speedtest.http_code);
+            snprintf(basement_.speedtest.error, sizeof(basement_.speedtest.error), "HTTP %d: %s", basement_.speedtest.http_code, desc.c_str());
+        }
+        else
+        {
+            snprintf(basement_.speedtest.error, sizeof(basement_.speedtest.error), "HTTP %d", basement_.speedtest.http_code);
+        }
         Serial.printf("SPEEDTEST trigger failed: HTTP %d\n", basement_.speedtest.http_code);
+        speedtest_completion_pending_ = false;
         speedtest_display_changed_ = true;
         return false;
     }
 
+    speedtest_completion_pending_ = true;
+    speedtest_pending_since_ms_ = now;
+    copyField(speedtest_pending_baseline_, sizeof(speedtest_pending_baseline_), basement_.speedtest.last_run);
     basement_.speedtest.is_running = true;
     basement_.speedtest.trigger_pending = false;
     basement_.speedtest.anim_phase = 0;
@@ -876,7 +972,7 @@ void AppState::syncRtcFromSystemTime(const tm& timeinfo)
 
 void AppState::fetchBasementStatusIfDue(bool force)
 {
-    basement_.configured = hasText(app_config::kBeelinkLhmUrl);
+    basement_.configured = configuredEndpointCount() > 0;
     const uint32_t now = millis();
     if (!force && basement_.last_attempt_ms != 0 && (now - basement_.last_attempt_ms) < refresh_interval_ms)
     {
@@ -886,40 +982,35 @@ void AppState::fetchBasementStatusIfDue(bool force)
 
     if (!basement_.configured || WiFi.status() != WL_CONNECTED)
     {
+        basement_.diag_state = basement_.configured ? SupportForgeDiagState::WifiDisconnected : SupportForgeDiagState::NotConfigured;
         noteBasementFailure(basement_.configured ? "wifi offline" : "endpoint not configured");
         Serial.printf("BEELINK skipped: %s\n", basement_.error);
         return;
     }
 
-    HTTPClient http;
-    http.setTimeout(app_config::kHttpTimeoutMs);
-    if (!http.begin(app_config::kBeelinkLhmUrl))
-    {
-        noteBasementFailure("HTTP begin failed");
-        Serial.println("BEELINK HTTP begin failed");
-        return;
-    }
-    http.addHeader("x-guardian-telemetry-token", app_config::kAuthToken);
-
-    basement_.http_code = http.GET();
+    String payload;
+    basement_.http_code = 0;
+    const bool request_ok = requestSupportForgeWithFailover("GET", false, &payload, basement_.http_code);
     if (basement_.http_code != HTTP_CODE_OK)
     {
-        char error[32] = {};
-        snprintf(error, sizeof(error), "HTTP %d", basement_.http_code);
+        char error[64] = {};
+        if (basement_.http_code < 0)
+        {
+            const String desc = HTTPClient::errorToString(basement_.http_code);
+            snprintf(error, sizeof(error), "HTTP %d: %s", basement_.http_code, desc.c_str());
+        }
+        else
+        {
+            snprintf(error, sizeof(error), "HTTP %d", basement_.http_code);
+            basement_.diag_state = SupportForgeDiagState::HttpResponseError;
+        }
         noteBasementFailure(error, basement_.http_code);
         if (basement_.http_code == HTTP_CODE_UNAUTHORIZED || basement_.http_code == HTTP_CODE_FORBIDDEN)
         {
             Serial.printf("supportFORGE authorization failed: HTTP %d\n", basement_.http_code);
         }
-        Serial.printf("BEELINK HTTP error: %d\n", basement_.http_code);
-        http.end();
+        Serial.printf("BEELINK HTTP error: %d via endpoint %u\n", basement_.http_code, basement_.active_endpoint + 1U);
         return;
-    }
-
-    if (!was_host_connected_)
-    {
-        playConnectionChime();
-        was_host_connected_ = true;
     }
 
     const bool should_auto_dismiss_alarm = basement_.alarm_active || alarm_.is_alarming || alarm_.is_muted || alarm_.is_dismissed || alarm_.snoozed_until_ms != 0;
@@ -934,12 +1025,12 @@ void AppState::fetchBasementStatusIfDue(bool force)
 
     StaticJsonDocument<3072> doc;
     doc.clear();
-    const DeserializationError err = deserializeJson(doc, http.getStream());
-    http.end();
+    const DeserializationError err = deserializeJson(doc, payload);
     if (err)
     {
         char error[48] = {};
         snprintf(error, sizeof(error), "JSON %s", err.c_str());
+        basement_.diag_state = SupportForgeDiagState::InvalidContent;
         noteBasementFailure(error, basement_.http_code);
         Serial.printf("BEELINK JSON error: %s\n", err.c_str());
         return;
@@ -956,7 +1047,7 @@ void AppState::fetchBasementStatusIfDue(bool force)
     basement_.cpu_load = doc["cpu_load"].as<float>();
     basement_.memory_used = doc["ram_used_gb"].as<float>();
     basement_.memory_total = doc["ram_total_gb"].as<float>();
-    parseSpeedTest(doc["speedtest"]);
+    const bool speedtest_completed = parseSpeedTest(doc["speedtest"]);
 
     basement_.disk_count = 0;
     for (uint8_t i = 0; i < BasementStatus::kMaxDisks; ++i)
@@ -1001,6 +1092,12 @@ void AppState::fetchBasementStatusIfDue(bool force)
     }
 
     basement_.has_host = hasText(telemetry_host);
+    if (!basement_.has_host)
+    {
+        basement_.diag_state = SupportForgeDiagState::HostMissing;
+        noteBasementFailure("host missing", basement_.http_code);
+        return;
+    }
     basement_.has_service = true;
     basement_.has_summary = true;
     copyField(basement_.host, sizeof(basement_.host), telemetry_host);
@@ -1012,7 +1109,17 @@ void AppState::fetchBasementStatusIfDue(bool force)
     basement_.has_disk_d = false;
     basement_.has_disk = true;
     basement_.has_uptime = true;
+    const bool was_confirmed_online = basement_.online && was_host_connected_;
     setBasementOnline();
+    if (!was_confirmed_online)
+    {
+        playMarioCoinChime();
+        was_host_connected_ = true;
+    }
+    else if (speedtest_completed)
+    {
+        playMarioCoinChime();
+    }
     basement_.last_success_ms = now;
     Serial.printf("BEELINK ok: online=%d cpu=%s mem=%s temps=%s uptime=%s\n",
                   basement_.online,
@@ -1022,18 +1129,170 @@ void AppState::fetchBasementStatusIfDue(bool force)
                   basement_.uptime);
 }
 
-void AppState::parseSpeedTest(JsonVariantConst speedtest)
+bool AppState::requestSupportForge(const char* telemetry_url, const char* method, String* response, int& http_code, bool& connection_level_failure)
+{
+    http_code = 0;
+    connection_level_failure = false;
+    if (response)
+    {
+        response->remove(0);
+    }
+
+    char request_url[260] = {};
+    if (strcmp(method, "POST") == 0)
+    {
+        speedTestEndpointFromTelemetry(telemetry_url, request_url, sizeof(request_url));
+    }
+    else
+    {
+        snprintf(request_url, sizeof(request_url), "%s", telemetry_url ? telemetry_url : "");
+    }
+
+    copyUrlForDiagnostics(basement_.active_url, sizeof(basement_.active_url), request_url);
+
+    char host[96] = {};
+    uint16_t port = 0;
+    if (!parseHttpUrl(request_url, host, sizeof(host), port))
+    {
+        basement_.diag_state = SupportForgeDiagState::InvalidContent;
+        copyField(basement_.diagnostic, sizeof(basement_.diagnostic), "invalid endpoint URL");
+        Serial.printf("supportFORGE invalid endpoint URL: %s\n", basement_.active_url);
+        return false;
+    }
+
+    IPAddress resolved;
+    if (WiFi.hostByName(host, resolved) != 1 || resolved == IPAddress(0, 0, 0, 0))
+    {
+        connection_level_failure = true;
+        basement_.diag_state = SupportForgeDiagState::DnsFailure;
+        basement_.resolved_ip[0] = '\0';
+        snprintf(basement_.diagnostic, sizeof(basement_.diagnostic), "DNS failed: %s", host);
+        Serial.printf("supportFORGE DNS failed host=%s url=%s\n", host, basement_.active_url);
+        return false;
+    }
+    copyField(basement_.resolved_ip, sizeof(basement_.resolved_ip), resolved.toString().c_str());
+
+    HTTPClient http;
+    http.setConnectTimeout(app_config::kHttpConnectTimeoutMs);
+    http.setTimeout(app_config::kHttpTimeoutMs);
+    if (!http.begin(request_url))
+    {
+        basement_.diag_state = SupportForgeDiagState::InvalidContent;
+        copyField(basement_.diagnostic, sizeof(basement_.diagnostic), "HTTP begin failed");
+        Serial.printf("supportFORGE HTTP begin failed url=%s\n", basement_.active_url);
+        return false;
+    }
+    http.addHeader("x-guardian-telemetry-token", app_config::kAuthToken);
+
+    http_code = strcmp(method, "POST") == 0 ? http.POST("") : http.GET();
+    if (http_code > 0 && response)
+    {
+        *response = http.getString();
+    }
+    http.end();
+
+    if (http_code < 0)
+    {
+        connection_level_failure = true;
+        basement_.diag_state = SupportForgeDiagState::TcpConnectionFailure;
+        const String desc = HTTPClient::errorToString(http_code);
+        snprintf(basement_.diagnostic, sizeof(basement_.diagnostic), "HTTP %d: %s", http_code, desc.c_str());
+        Serial.printf("supportFORGE transport failed url=%s resolved=%s HTTP %d: %s\n",
+                      basement_.active_url,
+                      basement_.resolved_ip,
+                      http_code,
+                      desc.c_str());
+        return false;
+    }
+
+    if (http_code < 200 || http_code >= 300)
+    {
+        basement_.diag_state = SupportForgeDiagState::HttpResponseError;
+        snprintf(basement_.diagnostic, sizeof(basement_.diagnostic), "HTTP response %d", http_code);
+        return false;
+    }
+
+    copyField(basement_.diagnostic, sizeof(basement_.diagnostic), "SupportForge response OK");
+    return true;
+}
+
+bool AppState::requestSupportForgeWithFailover(const char* method, bool speedtest, String* response, int& http_code)
+{
+    const uint8_t count = configuredEndpointCount();
+    if (count == 0 || WiFi.status() != WL_CONNECTED)
+    {
+        http_code = 0;
+        return false;
+    }
+
+    const uint32_t now = millis();
+    uint8_t order[2] = {supportforge_preferred_endpoint_, static_cast<uint8_t>(supportforge_preferred_endpoint_ == 0 ? 1 : 0)};
+    if (supportforge_preferred_endpoint_ != 0 && (last_supportforge_primary_retry_ms_ == 0 || (now - last_supportforge_primary_retry_ms_) >= app_config::kSupportForgePrimaryRetryMs))
+    {
+        order[0] = 0;
+        order[1] = supportforge_preferred_endpoint_;
+        last_supportforge_primary_retry_ms_ = now;
+    }
+
+    bool tried[2] = {false, false};
+    for (uint8_t i = 0; i < 2; ++i)
+    {
+        const uint8_t endpoint_index = order[i];
+        if (endpoint_index > 1 || tried[endpoint_index])
+        {
+            continue;
+        }
+        tried[endpoint_index] = true;
+        const char* endpoint_url = nullptr;
+        if (!configuredEndpoint(endpoint_index, endpoint_url))
+        {
+            continue;
+        }
+
+        basement_.active_endpoint = endpoint_index;
+        bool connection_level_failure = false;
+        const bool ok = requestSupportForge(endpoint_url, method, response, http_code, connection_level_failure);
+        Serial.printf("supportFORGE %s %s endpoint=%u url=%s code=%d diag=%s\n",
+                      speedtest ? "speedtest" : "telemetry",
+                      method,
+                      endpoint_index + 1U,
+                      basement_.active_url,
+                      http_code,
+                      basement_.diagnostic);
+        if (ok)
+        {
+            supportforge_preferred_endpoint_ = endpoint_index;
+            if (endpoint_index == 0)
+            {
+                last_supportforge_primary_retry_ms_ = 0;
+            }
+            return true;
+        }
+        if (!connection_level_failure)
+        {
+            return false;
+        }
+    }
+    return false;
+}
+
+bool AppState::parseSpeedTest(JsonVariantConst speedtest)
 {
     const bool was_running = basement_.speedtest.is_running;
+    bool completion_chime_due = false;
     if (speedtest.isNull())
     {
         basement_.speedtest.is_running = false;
         basement_.speedtest.trigger_pending = false;
+        if (speedtest_completion_pending_ && speedtest_pending_since_ms_ != 0 && (millis() - speedtest_pending_since_ms_) >= kSpeedTestPendingTimeoutMs)
+        {
+            speedtest_completion_pending_ = false;
+        }
         if (was_running)
         {
             speedtest_display_changed_ = true;
         }
-        return;
+        return false;
     }
 
     basement_.speedtest.is_running = firstBool(speedtest, "is_running", "running");
@@ -1051,6 +1310,21 @@ void AppState::parseSpeedTest(JsonVariantConst speedtest)
 
     const bool has_metrics = basement_.speedtest.download_mbps > 0.0f || basement_.speedtest.upload_mbps > 0.0f || basement_.speedtest.ping_ms > 0.0f;
     basement_.speedtest.has_result = has_metrics || hasText(basement_.speedtest.last_run);
+    const bool has_completion_id = hasText(basement_.speedtest.last_run);
+    const bool has_finished_result = !basement_.speedtest.is_running && has_metrics && has_completion_id;
+
+    if (has_finished_result)
+    {
+        if (!speedtest_result_tracking_initialized_)
+        {
+            copyField(speedtest_last_seen_completion_, sizeof(speedtest_last_seen_completion_), basement_.speedtest.last_run);
+            speedtest_result_tracking_initialized_ = true;
+        }
+        else if (strcmp(speedtest_last_seen_completion_, basement_.speedtest.last_run) != 0)
+        {
+            copyField(speedtest_last_seen_completion_, sizeof(speedtest_last_seen_completion_), basement_.speedtest.last_run);
+        }
+    }
     if (basement_.speedtest.has_result || basement_.speedtest.is_running)
     {
         basement_.speedtest.error[0] = '\0';
@@ -1063,18 +1337,39 @@ void AppState::parseSpeedTest(JsonVariantConst speedtest)
     if (was_running && !basement_.speedtest.is_running)
     {
         speedtest_was_running_ = false;
-        playMarioCoinChime();
     }
+    if (speedtest_completion_pending_ && has_finished_result &&
+        strcmp(speedtest_pending_baseline_, basement_.speedtest.last_run) != 0 &&
+        strcmp(speedtest_last_chimed_completion_, basement_.speedtest.last_run) != 0)
+    {
+        completion_chime_due = true;
+        copyField(speedtest_last_chimed_completion_, sizeof(speedtest_last_chimed_completion_), basement_.speedtest.last_run);
+        speedtest_completion_pending_ = false;
+    }
+    else if (speedtest_completion_pending_ && speedtest_pending_since_ms_ != 0 && (millis() - speedtest_pending_since_ms_) >= kSpeedTestPendingTimeoutMs)
+    {
+        speedtest_completion_pending_ = false;
+    }
+    return completion_chime_due;
 }
 
 void AppState::updateSpeedTestPolling(uint32_t now)
 {
-    if (!basement_.speedtest.is_running)
+    if (!basement_.speedtest.is_running && !speedtest_completion_pending_)
     {
         return;
     }
 
-    if (last_speedtest_anim_ms_ == 0 || (now - last_speedtest_anim_ms_) >= kSpeedTestAnimMs)
+    if (speedtest_completion_pending_ && speedtest_pending_since_ms_ != 0 && (now - speedtest_pending_since_ms_) >= kSpeedTestPendingTimeoutMs)
+    {
+        speedtest_completion_pending_ = false;
+        if (!basement_.speedtest.is_running)
+        {
+            return;
+        }
+    }
+
+    if (basement_.speedtest.is_running && (last_speedtest_anim_ms_ == 0 || (now - last_speedtest_anim_ms_) >= kSpeedTestAnimMs))
     {
         basement_.speedtest.anim_phase = static_cast<uint8_t>((basement_.speedtest.anim_phase + 1U) % 4U);
         last_speedtest_anim_ms_ = now;
@@ -1122,6 +1417,7 @@ void AppState::setBasementOnline()
 {
     const bool was_alarm_active = basement_.alarm_active || alarm_.is_alarming || alarm_.is_muted || alarm_.is_dismissed || alarm_.snoozed_until_ms != 0;
     basement_.online = true;
+    basement_.diag_state = SupportForgeDiagState::Online;
     basement_.server_status = ServerStatus::Online;
     resetAlarmState();
     basement_.consecutive_failures = 0;

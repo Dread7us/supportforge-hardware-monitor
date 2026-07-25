@@ -322,6 +322,23 @@ const char* timeSourceText(TimeSource source)
     }
 }
 
+const char* supportForgeDiagText(SupportForgeDiagState state)
+{
+    switch (state)
+    {
+    case SupportForgeDiagState::WifiDisconnected: return "M5 WIFI OFF";
+    case SupportForgeDiagState::DnsFailure: return "DNS FAIL";
+    case SupportForgeDiagState::TcpConnectionFailure: return "TCP FAIL";
+    case SupportForgeDiagState::HttpResponseError: return "HTTP ERROR";
+    case SupportForgeDiagState::InvalidContent: return "BAD CONTENT";
+    case SupportForgeDiagState::HostMissing: return "HOST MISSING";
+    case SupportForgeDiagState::TargetOffline: return "TARGET OFF";
+    case SupportForgeDiagState::Online: return "VALID RESPONSE";
+    case SupportForgeDiagState::NotConfigured:
+    default: return "NOT SET";
+    }
+}
+
 void bluetoothIcon(int x, int y, const DeviceStatus& s, bool inverse)
 {
     if (!s.bluetooth_supported)
@@ -812,16 +829,19 @@ void renderNetwork(const AppState& state)
     header("NETWORK", state);
 
     const DeviceStatus& s = state.status();
+    const BasementStatus& b = state.basement();
     const char* wifi_state = s.wifi_connected ? "CONNECTED" : (s.wifi_configured ? "CONNECTING" : "NOT SET");
-    panel(10, 34, 180, 54, "WIFI STATUS");
-    drawTextCentered(100, 54, wifi_state, coreink_gfx::Font::Small, 160);
-    drawTextCentered(100, 70, s.wifi_ssid[0] ? s.wifi_ssid : "<none>", coreink_gfx::Font::Small, 160);
+    panel(10, 30, 180, 44, "WIFI STATUS");
+    drawTextCentered(100, 48, wifi_state, coreink_gfx::Font::Small, 160);
+    drawTextCentered(100, 62, s.wifi_ssid[0] ? s.wifi_ssid : "<none>", coreink_gfx::Font::Small, 160);
 
-    panel(10, 96, 180, 78, "NETWORK DETAILS");
-    labelValueRow(18, 116, 164, "IP", s.wifi_ip);
-    labelValueRowf(18, 132, 164, "RSSI", "%d dBm", s.wifi_rssi);
-    labelValueRowf(18, 148, 164, "Bars", "%d / 4", s.wifi_strength);
-    labelValueRowf(18, 164, 164, "Scan", "%d nets  NTP %s", s.wifi_scan_count, s.time_synced ? "OK" : "WAIT");
+    panel(10, 80, 180, 52, "NETWORK DETAILS");
+    labelValueRow(18, 100, 164, "IP", s.wifi_ip);
+    labelValueRowf(18, 116, 164, "RSSI", "%d dBm %d/4", s.wifi_rssi, s.wifi_strength);
+
+    panel(10, 138, 180, 42, "FORGE LINK");
+    labelValueRowf(18, 154, 164, "EP", "%u %s", static_cast<unsigned>(b.active_endpoint + 1U), supportForgeDiagText(b.diag_state));
+    labelValueRow(18, 170, 164, "DST", b.resolved_ip[0] ? b.resolved_ip : b.diagnostic);
 
     footerNav("MID", "NTP");
 }
@@ -859,7 +879,7 @@ void renderBeelink(const AppState& state)
     selectableMetricRow(10, 78, 180, "CPU", b.online && b.has_cpu ? b.cpu : "--", b.beelink_cursor == 0);
     selectableMetricRow(10, 99, 180, "RAM", b.online && b.has_memory ? b.memory : "--", b.beelink_cursor == 1);
     selectableMetricRow(10, 120, 180, "TEMP", b.online && b.has_disk ? b.disk : "--", b.beelink_cursor == 2);
-    selectableMetricRow(10, 141, 180, "UP", b.online && b.has_uptime ? b.uptime : b.error, b.beelink_cursor == 3);
+    selectableMetricRow(10, 141, 180, "UP", b.online && b.has_uptime ? b.uptime : supportForgeDiagText(b.diag_state), b.beelink_cursor == 3);
 
     char interval[24] = {};
     snprintf(interval, sizeof(interval), "%s", refreshIntervalText(state.refresh_interval_ms));
@@ -1031,6 +1051,7 @@ void renderSystem(const AppState& state)
 
     footerNav("MID", "DOWN");
 }
+
 
 void renderHelpButtons(const AppState& state)
 {

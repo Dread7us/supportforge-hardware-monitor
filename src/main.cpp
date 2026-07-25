@@ -19,7 +19,6 @@ bool force_render = true;
 bool force_full_clear = true;
 bool manual_full_refresh_requested = false;
 Page last_rendered_page = Page::Dashboard;
-bool last_rendered_speedtest_running = false;
 
 uint32_t refreshIntervalFor(Page page)
 {
@@ -65,40 +64,15 @@ bool handleRefreshButton(ButtonEvent event)
     return false;
 }
 
-bool speedTestViewTransitionRequiresFullClear(Page previous_page,
-                                              Page current_page,
-                                              bool previous_running,
-                                              bool current_running)
-{
-    const bool was_speed_detail = previous_page == Page::BeelinkSpeedTestDetail;
-    const bool is_speed_detail = current_page == Page::BeelinkSpeedTestDetail;
-    if (was_speed_detail != is_speed_detail)
-    {
-        return true;
-    }
-
-    // Running -> complete/error and idle/result -> running are materially
-    // different speed-test views. Promote them to true full hardware clears;
-    // animation phase changes while still running remain partial updates.
-    return is_speed_detail && previous_running != current_running;
-}
-
 void renderWithAntiGhosting(uint32_t now)
 {
     const Page current_page = app.page();
-    const bool current_speedtest_running = app.basement().speedtest.is_running;
-    const bool page_changed = current_page != last_rendered_page;
-    const bool speedtest_transition = speedTestViewTransitionRequiresFullClear(last_rendered_page,
-                                                                               current_page,
-                                                                               last_rendered_speedtest_running,
-                                                                               current_speedtest_running);
-    const bool needs_full_clear = force_full_clear || page_changed || speedtest_transition;
+    const bool needs_full_clear = force_full_clear;
 
     display.render(app, needs_full_clear);
     app.noteRefresh();
     last_render_ms = now;
     last_rendered_page = current_page;
-    last_rendered_speedtest_running = current_speedtest_running;
     force_render = false;
     force_full_clear = false;
 }
@@ -236,7 +210,6 @@ void handleButton(ButtonEvent event)
         {
             app.setPage(Page::Beelink);
             force_render = true;
-            force_full_clear = true;
         }
         else if (event == ButtonEvent::FastRefresh || event == ButtonEvent::FullRefresh)
         {
@@ -339,7 +312,6 @@ void setup()
     app.noteRefresh();
     last_render_ms = now;
     last_rendered_page = app.page();
-    last_rendered_speedtest_running = app.basement().speedtest.is_running;
     force_render = false;
     force_full_clear = false;
 
@@ -364,7 +336,6 @@ void loop()
         last_render_ms = millis();
         last_full_refresh_ms = last_render_ms;
         last_rendered_page = app.page();
-        last_rendered_speedtest_running = app.basement().speedtest.is_running;
         force_render = false;
         force_full_clear = false;
         manual_full_refresh_requested = false;

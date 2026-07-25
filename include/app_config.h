@@ -13,6 +13,15 @@ constexpr const char* kVersion = "1.0.1";
 #define COREINK_TARGET_HOST_NAME kAppName
 #endif
 
+// Primary SupportForge telemetry endpoint. Prefer a stable LAN hostname here
+// (for example http://supportforge.local:PORT/api/v1/telemetry) instead of an
+// adapter-specific IPv4 address so Ethernet/Wi-Fi host changes do not require
+// firmware changes.
+
+#ifndef COREINK_BEELINK_LHM_FALLBACK_URL
+#define COREINK_BEELINK_LHM_FALLBACK_URL ""
+#endif
+
 #ifndef COREINK_NTP_SERVER
 #define COREINK_NTP_SERVER "pool.ntp.org"
 #endif
@@ -25,6 +34,7 @@ constexpr const char* kWifiSsid = COREINK_WIFI_SSID;
 constexpr const char* kWifiPassword = COREINK_WIFI_PASSWORD;
 constexpr const char* kBasementStatusUrl = COREINK_BASEMENT_STATUS_URL;
 constexpr const char* kBeelinkLhmUrl = COREINK_BEELINK_LHM_URL;
+constexpr const char* kBeelinkLhmFallbackUrl = COREINK_BEELINK_LHM_FALLBACK_URL;
 constexpr const char* kTargetHostName = COREINK_TARGET_HOST_NAME;
 constexpr const char* kNtpServer = COREINK_NTP_SERVER;
 constexpr const char* kTimezone = COREINK_TZ;
@@ -48,6 +58,8 @@ constexpr uint32_t kWeatherRefreshMs = 10UL * 60UL * 1000UL;
 constexpr uint32_t kNtpInitialRetryMs = 30'000;
 constexpr uint32_t kNtpResyncMs = 6UL * 60UL * 60UL * 1000UL;
 constexpr uint32_t kHttpTimeoutMs = 4'000;
+constexpr uint32_t kHttpConnectTimeoutMs = 2'500;
+constexpr uint32_t kSupportForgePrimaryRetryMs = 60'000;
 constexpr uint32_t kDebounceMs = 300;
 constexpr uint8_t kBasementAlarmFailureThreshold = 3;
 constexpr uint32_t kAlarmSnoozeMs = 15UL * 60UL * 1000UL;
