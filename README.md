@@ -69,7 +69,7 @@ Create the active local secrets file at `src/secrets.h`. Copy the template below
 // Primary supportFORGE telemetry endpoint
 #ifndef COREINK_BASEMENT_STATUS_URL
 #define COREINK_BASEMENT_STATUS_URL \
-    "http://YOUR_PRIMARY_SERVER_IP:PORT/api/v1/admin/guardian/telemetry"
+    "http://YOUR_PRIMARY_SERVER_IP:PORT"
 #endif
 
 #ifndef COREINK_BEELINK_LHM_URL
@@ -80,7 +80,7 @@ Create the active local secrets file at `src/secrets.h`. Copy the template below
 // Leave empty when no fallback server address is available.
 #ifndef COREINK_BEELINK_LHM_FALLBACK_URL
 #define COREINK_BEELINK_LHM_FALLBACK_URL \
-    "http://YOUR_FALLBACK_SERVER_IP:PORT/api/v1/admin/guardian/telemetry"
+    "http://YOUR_FALLBACK_SERVER_IP:PORT"
 #endif
 
 // Application Authentication Token
