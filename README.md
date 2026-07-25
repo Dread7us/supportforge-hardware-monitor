@@ -51,7 +51,7 @@ To keep your personal network credentials, server endpoints, and location coordi
 
 ### 1. Configure Local Secrets
 
-Create a file named `secrets.h` inside the `src/` directory. Copy the template below and update the values with your local network infrastructure, target telemetry endpoints, and local coordinates:
+Create the active local secrets file at `src/secrets.h`. Copy the template below and update the values with your local network infrastructure, telemetry endpoints, and local coordinates. The primary endpoint is attempted first. The fallback endpoint is optional, is used only after a connection-level primary failure, and any successful fallback is remembered temporarily while the primary endpoint is periodically retried:
 
 ```cpp
 #ifndef SECRETS_H
@@ -66,13 +66,21 @@ Create a file named `secrets.h` inside the `src/` directory. Copy the template b
 #define COREINK_WIFI_PASSWORD "YOUR_WIFI_PASSWORD"
 #endif
 
-// Telemetry Host API Configuration
+// Primary supportFORGE telemetry endpoint
 #ifndef COREINK_BASEMENT_STATUS_URL
-#define COREINK_BASEMENT_STATUS_URL "http://YOUR_SERVER_IP:PORT/api/v1/telemetry"
+#define COREINK_BASEMENT_STATUS_URL \
+    "http://YOUR_PRIMARY_SERVER_IP:PORT/api/v1/admin/guardian/telemetry"
 #endif
 
 #ifndef COREINK_BEELINK_LHM_URL
 #define COREINK_BEELINK_LHM_URL COREINK_BASEMENT_STATUS_URL
+#endif
+
+// Optional secondary endpoint used after a connection-level primary failure.
+// Leave empty when no fallback server address is available.
+#ifndef COREINK_BEELINK_LHM_FALLBACK_URL
+#define COREINK_BEELINK_LHM_FALLBACK_URL \
+    "http://YOUR_FALLBACK_SERVER_IP:PORT/api/v1/admin/guardian/telemetry"
 #endif
 
 // Application Authentication Token
@@ -82,7 +90,7 @@ Create a file named `secrets.h` inside the `src/` directory. Copy the template b
 
 // Geographic Fallbacks for Weather Services
 #ifndef WEATHER_LAT
-#define WEATHER_LAT 0.0000 
+#define WEATHER_LAT 0.0000
 #endif
 
 #ifndef WEATHER_LON
@@ -98,7 +106,7 @@ Create a file named `secrets.h` inside the `src/` directory. Copy the template b
 
 ### 2. Verify Version Control Safety
 
-Ensure your root `.gitignore` file contains a dedicated rule for `src/secrets.h` to prevent accidental commits of your private configuration data.
+Ensure your root `.gitignore` file contains a dedicated rule for `src/secrets.h` to prevent accidental commits of your private configuration data. Real credentials, authentication tokens, SSIDs, and private server addresses must never be committed.
 
 ---
 
