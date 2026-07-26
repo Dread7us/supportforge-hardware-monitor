@@ -1036,7 +1036,10 @@ void AppState::fetchBasementStatusIfDue(bool force)
         return;
     }
 
-    basement_.cpu_temp_f = doc["cpu_temp"].as<float>();
+    const bool has_cpu_load = !doc["cpu_load"].isNull();
+    const bool has_cpu_temp = !doc["cpu_temp"].isNull();
+
+    basement_.cpu_temp_f = has_cpu_temp ? doc["cpu_temp"].as<float>() : 0.0f;
     basement_.nvme_temp_f = doc["nvme_temp"].as<float>();
     basement_.cpu_temp_c = (basement_.cpu_temp_f - 32.0f) * (5.0f / 9.0f);
     basement_.nvme_temp_c = (basement_.nvme_temp_f - 32.0f) * (5.0f / 9.0f);
@@ -1044,7 +1047,7 @@ void AppState::fetchBasementStatusIfDue(bool force)
     const long uptime_days = uptime_seconds / 86400L;
     const long uptime_hours = (uptime_seconds / 3600L) % 24L;
     const long uptime_minutes = (uptime_seconds / 60L) % 60L;
-    basement_.cpu_load = doc["cpu_load"].as<float>();
+    basement_.cpu_load = has_cpu_load ? doc["cpu_load"].as<float>() : 0.0f;
     basement_.memory_used = doc["ram_used_gb"].as<float>();
     basement_.memory_total = doc["ram_total_gb"].as<float>();
     const bool speedtest_completed = parseSpeedTest(doc["speedtest"]);
@@ -1071,7 +1074,14 @@ void AppState::fetchBasementStatusIfDue(bool force)
         ++basement_.disk_count;
     }
 
-    snprintf(basement_.cpu, sizeof(basement_.cpu), "%.0f%%", static_cast<double>(basement_.cpu_load));
+    if (has_cpu_load)
+    {
+        snprintf(basement_.cpu, sizeof(basement_.cpu), "%.0f%%", static_cast<double>(basement_.cpu_load));
+    }
+    else
+    {
+        snprintf(basement_.cpu, sizeof(basement_.cpu), "--");
+    }
     snprintf(basement_.memory, sizeof(basement_.memory), "%.1fGB", static_cast<double>(basement_.memory_used));
     updateBeelinkTempFormats();
     snprintf(basement_.uptime,
@@ -1103,7 +1113,8 @@ void AppState::fetchBasementStatusIfDue(bool force)
     copyField(basement_.host, sizeof(basement_.host), telemetry_host);
     copyField(basement_.service, sizeof(basement_.service), app_config::kAppName);
     copyField(basement_.summary, sizeof(basement_.summary), app_config::kAppName);
-    basement_.has_cpu = true;
+    basement_.has_cpu = has_cpu_load;
+    basement_.has_cpu_temp = has_cpu_temp;
     basement_.has_memory = true;
     basement_.has_disk_c = false;
     basement_.has_disk_d = false;
@@ -1395,6 +1406,7 @@ void AppState::noteBasementFailure(const char* error, int http_code)
     basement_.server_status = basement_.alarm_active ? ServerStatus::Offline : ServerStatus::Online;
     basement_.http_code = http_code;
     basement_.has_cpu = false;
+    basement_.has_cpu_temp = false;
     basement_.has_memory = false;
     basement_.has_disk = false;
     basement_.has_uptime = false;

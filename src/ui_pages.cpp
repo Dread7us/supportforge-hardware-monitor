@@ -896,13 +896,24 @@ void renderBeelinkCpuDetail(const AppState& state)
     const BasementStatus& b = state.basement();
     const char unit = state.hostTempIsF() ? 'F' : 'C';
     const float cpu_temp = state.hostTempIsF() ? b.cpu_temp_f : b.cpu_temp_c;
-
-    panel(10, 38, 180, 94, "CPU DETAIL");
+    char use_text[12] = "--";
+    char temp_text[12] = "--";
     if (b.online && b.has_cpu)
     {
-        labelValueRowf(18, 62, 164, "Use", "%s %.0f%%", app_config::kTargetHostName, static_cast<double>(b.cpu_load));
-        labelValueRowf(18, 84, 164, "Temp", "%s %.0f%c%c", app_config::kTargetHostName, static_cast<double>(cpu_temp), 0xB0, unit);
-        progressBar(18, 108, 164, 14, static_cast<int>(b.cpu_load + 0.5f));
+        snprintf(use_text, sizeof(use_text), "%.0f%%", static_cast<double>(b.cpu_load));
+    }
+    if (b.online && b.has_cpu_temp)
+    {
+        snprintf(temp_text, sizeof(temp_text), "%.0f%c%c", static_cast<double>(cpu_temp), 0xB0, unit);
+    }
+
+    panel(10, 38, 180, 94, "CPU DETAIL");
+    if (b.online)
+    {
+        coreink_gfx::fillRect(72, 62, 110, 38, false);
+        labelValueRow(18, 62, 164, "Use", use_text);
+        labelValueRow(18, 84, 164, "Temp", temp_text);
+        progressBar(18, 108, 164, 14, b.has_cpu ? static_cast<int>(b.cpu_load + 0.5f) : -1);
     }
     else
     {

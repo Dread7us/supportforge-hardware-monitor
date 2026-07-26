@@ -128,6 +128,7 @@ struct BasementStatus
     bool has_service = false;
     bool has_summary = false;
     bool has_cpu = false;
+    bool has_cpu_temp = false;
     bool has_memory = false;
     bool has_disk = false;
     bool has_uptime = false;
