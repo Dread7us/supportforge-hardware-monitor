@@ -15,6 +15,7 @@ enum class Page : uint8_t
     Power,
     Sleep,
     Count,
+    LowPowerActive,
     Alarm,
     BeelinkCpuDetail,
     BeelinkMemDetail,
@@ -193,6 +194,22 @@ struct AlarmStatus
     uint32_t next_buzzer_ms = 0;
 };
 
+struct LowPowerStatus
+{
+    bool active = false;
+    bool arming = false;
+    bool wifi_shutdown = false;
+    uint8_t interval_index = 1;
+    uint32_t interval_ms = 5UL * 60UL * 1000UL;
+    uint32_t next_check_ms = 0;
+    uint32_t last_check_ms = 0;
+    uint32_t last_display_minute_ms = 0;
+    uint32_t arming_started_ms = 0;
+    uint32_t arming_duration_ms = 5000U;
+    uint8_t arming_progress_step = 0;
+    uint8_t settings_focus = 0;
+};
+
 class AppState
 {
   public:
@@ -207,6 +224,7 @@ class AppState
     BasementStatus& basement() { return basement_; }
     const WeatherStatus& weather() const { return weather_; }
     const AlarmStatus& alarm() const { return alarm_; }
+    const LowPowerStatus& lowPower() const { return low_power_; }
     uint32_t lastStatusUpdateMs() const { return last_status_update_ms_; }
     uint32_t refresh_interval_ms = 60000;
 
@@ -229,6 +247,22 @@ class AppState
     bool is24HourTime() const { return is_24h_; }
     void cycleDashboardDisplayPrefs();
     void cycleRefreshInterval();
+    void requestLowPowerMode();
+    void activateLowPowerMode();
+    void completeLowPowerActivationAfterDisplay();
+    void cancelLowPowerArming();
+    bool updateLowPowerArming(uint32_t now);
+    uint8_t lowPowerArmingProgressPercent(uint32_t now) const;
+    bool isLowPowerArming() const { return low_power_.arming; }
+    bool isLowPowerTransitionOrActive() const { return low_power_.arming || low_power_.active; }
+    void exitLowPowerMode();
+    void cycleLowPowerInterval();
+    void moveLowPowerSettingsFocus(int8_t direction);
+    bool isLowPowerModeActive() const { return low_power_.active; }
+    uint32_t lowPowerSleepDurationMs(uint32_t now) const;
+    bool lowPowerMinuteDisplayDue(uint32_t now) const;
+    void noteLowPowerDisplay(uint32_t now);
+    bool runLowPowerMonitoringCycle();
     bool consumeBatteryDisplayChanged();
     uint8_t chargeAnimPhase() const { return charge_anim_phase_; }
     bool consumeChargeAnimDisplayChanged();
@@ -241,6 +275,9 @@ class AppState
 
   private:
     void connectWifiIfNeeded();
+    bool connectWifiBounded(uint32_t timeout_ms);
+    void shutdownWifiForLowPower();
+    void restoreNormalSchedulesAfterLowPower();
     void configureTimeIfNeeded();
     void readBattery();
     void readTime();
@@ -276,6 +313,7 @@ class AppState
     BasementStatus basement_{};
     WeatherStatus weather_{};
     AlarmStatus alarm_{};
+    LowPowerStatus low_power_{};
     int last_battery_percentage_ = -2;
     bool last_charging_ = false;
     bool has_battery_display_sample_ = false;

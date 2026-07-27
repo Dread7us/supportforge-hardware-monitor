@@ -282,6 +282,9 @@ void Display::drawPage(const AppState& state)
     case Page::Sleep:
         ui_pages::renderSleep(state);
         break;
+    case Page::LowPowerActive:
+        ui_pages::renderLowPowerActive(state);
+        break;
     default:
         ui_pages::renderDashboard(state);
         break;

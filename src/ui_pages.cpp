@@ -268,6 +268,58 @@ const char* refreshIntervalText(uint32_t interval_ms)
     }
 }
 
+const char* lowPowerIntervalText(uint32_t interval_ms)
+{
+    switch (interval_ms)
+    {
+    case 60000U: return "1 min";
+    case 300000U: return "5 min";
+    case 600000U: return "10 min";
+    case 1200000U: return "20 min";
+    case 1800000U: return "30 min";
+    default: return "5 min";
+    }
+}
+
+const char* lowPowerIntervalNumber(uint32_t interval_ms)
+{
+    switch (interval_ms)
+    {
+    case 60000U: return "1";
+    case 300000U: return "5";
+    case 600000U: return "10";
+    case 1200000U: return "20";
+    case 1800000U: return "30";
+    default: return "5";
+    }
+}
+
+void formatLowPowerClock(const DeviceStatus& s, uint32_t event_ms, char* out, size_t out_len)
+{
+    if (!out || out_len == 0)
+    {
+        return;
+    }
+    if (event_ms == 0)
+    {
+        snprintf(out, out_len, "--:--");
+        return;
+    }
+    const uint32_t age_s = (millis() - event_ms) / 1000U;
+    if (age_s < 90U)
+    {
+        snprintf(out, out_len, "%s", s.time_text);
+    }
+    else if (age_s < 3600U)
+    {
+        snprintf(out, out_len, "%lum ago", static_cast<unsigned long>(age_s / 60U));
+    }
+    else
+    {
+        snprintf(out, out_len, "%luh ago", static_cast<unsigned long>(age_s / 3600U));
+    }
+}
+
 void soundIcon(int x, int y, const BasementStatus& b, bool inverse)
 {
     coreink_gfx::drawRect(x, y + 4, 4, 6, inverse);
@@ -1098,15 +1150,115 @@ void renderHelpInfo(const AppState& state)
 
 void renderSleep(const AppState& state)
 {
-    header("SLEEP", state);
+    const BasementStatus& b = state.basement();
+    const LowPowerStatus& lp = state.lowPower();
 
-    panel(14, 42, 172, 112, "LOW POWER");
-    drawTextCentered(100, 66, "CoreInk", coreink_gfx::Font::Large, 168);
-    drawTextCentered(100, 116, "RESTING", coreink_gfx::Font::Small, 140);
-    coreink_gfx::drawRect(28, 132, 144, 18);
-    drawTextCentered(100, 133, "PWR Wake", coreink_gfx::Font::Small, 136);
+    coreink_gfx::drawRect(4, 4, 192, 192);
+    coreink_gfx::drawRect(8, 8, 184, 184);
+    coreink_gfx::fillRect(14, 14, 172, 20, true);
+    drawTextCentered(100, 16, "LOW POWER SETUP", coreink_gfx::Font::Small, 160, true);
 
-    footerNav("STATIC", "LOW PWR");
+    coreink_gfx::fillRect(12, 38, 176, 140, false);
+
+    const char* host = b.has_host && b.host[0] ? b.host : app_config::kTargetHostName;
+    drawTextCentered(100, 42, host, coreink_gfx::Font::Small, 168);
+    drawTextCentered(100, 59, "Checks host while sleeping", coreink_gfx::Font::Small, 184);
+
+    selectableMetricRow(18, 82, 164, "INT", lowPowerIntervalText(lp.interval_ms), lp.settings_focus == 0);
+
+    const bool start_selected = lp.settings_focus == 1;
+    coreink_gfx::fillRect(18, 108, 164, 24, start_selected);
+    coreink_gfx::drawRect(18, 108, 164, 24, !start_selected);
+    drawTextCentered(100, 112, "START LOW POWER", coreink_gfx::Font::Small, 156, start_selected);
+
+    const bool back_selected = lp.settings_focus == 2;
+    coreink_gfx::fillRect(18, 138, 164, 22, back_selected);
+    coreink_gfx::drawRect(18, 138, 164, 22, !back_selected);
+    drawTextCentered(100, 141, "BACK", coreink_gfx::Font::Small, 156, back_selected);
+
+    footerNav("MID select", "UP/DOWN move");
+}
+
+void renderLowPowerActive(const AppState& state)
+{
+    const DeviceStatus& s = state.status();
+    const BasementStatus& b = state.basement();
+    const LowPowerStatus& lp = state.lowPower();
+
+    coreink_gfx::drawRect(4, 4, 192, 192);
+    coreink_gfx::drawRect(8, 8, 184, 184);
+    coreink_gfx::fillRect(14, 14, 172, 20, true);
+    drawTextCentered(100, 16, "LOW POWER", coreink_gfx::Font::Small, 160, true);
+
+    coreink_gfx::fillRect(12, 38, 176, 142, false);
+
+    const char* host = b.has_host && b.host[0] ? b.host : app_config::kTargetHostName;
+    drawTextCentered(100, 42, host, coreink_gfx::Font::Small, 168);
+
+    coreink_gfx::drawRect(14, 62, 82, 52);
+    drawTextCentered(55, 66, "INTERVAL", coreink_gfx::Font::Small, 74);
+    const char* interval_num = lowPowerIntervalNumber(lp.interval_ms);
+    const int num_width = textWidth(interval_num, coreink_gfx::Font::Large);
+    const int interval_x = 55 - ((num_width + 32) / 2);
+    drawTextClipped(interval_x, 74, interval_num, coreink_gfx::Font::Large, 48);
+    drawTextClipped(interval_x + num_width + 4, 91, "MIN", coreink_gfx::Font::Small, 28);
+
+    const char* state_text = lp.arming ? "READY" : (b.online ? "ONLINE" : (b.alarm_active || b.diag_state == SupportForgeDiagState::NotConfigured ? "UNAVAIL" : "OFFLINE"));
+    coreink_gfx::drawRect(104, 62, 82, 52);
+    drawTextCentered(145, 66, "STATUS", coreink_gfx::Font::Small, 74);
+    coreink_gfx::fillRect(112, 84, 66, 18, true);
+    drawTextCentered(145, 85, state_text, coreink_gfx::Font::Small, 60, true);
+
+    char last[20] = {};
+    formatLowPowerClock(s, lp.last_check_ms, last, sizeof(last));
+
+    const uint32_t now = millis();
+    char next[20] = {};
+    if (lp.arming)
+    {
+        snprintf(next, sizeof(next), "ARMING");
+    }
+    else if (lp.next_check_ms == 0 || static_cast<int32_t>(lp.next_check_ms - now) <= 0)
+    {
+        snprintf(next, sizeof(next), "DUE");
+    }
+    else
+    {
+        const uint32_t remain_s = (lp.next_check_ms - now + 59999U) / 60000U;
+        snprintf(next, sizeof(next), "%lum", static_cast<unsigned long>(remain_s));
+    }
+
+    char batt[16] = {};
+    snprintf(batt, sizeof(batt), "%s", s.battery_valid ? "" : "--");
+    if (s.battery_valid)
+    {
+        snprintf(batt, sizeof(batt), "%d%%", clampPercent(s.battery_percent));
+    }
+    labelValueRow(18, 122, 76, "LAST", last);
+    labelValueRow(104, 122, 76, "NEXT", next);
+    drawTextClipped(18, 140, "BAT", coreink_gfx::Font::Small, 40);
+    // Blank the complete four-character value region before redrawing so a
+    // transition from 100% to fewer digits cannot leave stale e-paper pixels.
+    coreink_gfx::fillRect(62, 140, 32, 16, false);
+    drawTextRightAligned(94, 140, batt, coreink_gfx::Font::Small, 32);
+
+    char fail[20] = {};
+    snprintf(fail, sizeof(fail), "%u/%u EP%u", static_cast<unsigned>(b.consecutive_failures), static_cast<unsigned>(app_config::kBasementAlarmFailureThreshold), static_cast<unsigned>(b.active_endpoint + 1U));
+    labelValueRow(104, 140, 76, "FAIL", fail);
+
+    coreink_gfx::fillRect(14, 158, 172, 20, false);
+    if (lp.arming)
+    {
+        drawTextCentered(100, 158, "ENTERING LOW POWER", coreink_gfx::Font::Small, 168);
+        progressBar(22, 173, 156, 8, state.lowPowerArmingProgressPercent(now));
+    }
+    else
+    {
+        drawTextCentered(100, 160, lp.active ? "LOW POWER ACTIVE" : "READY", coreink_gfx::Font::Small, 168);
+        progressBar(22, 174, 156, 6, lp.active ? 100 : 0);
+    }
+
+    footerNav(lp.arming ? "DOWN/PWR cancel" : "PWR/DOWN exit", "");
 }
 
 void renderAlarmPage(const AppState& state)

@@ -4,6 +4,8 @@
 #include "display.h"
 #include <Arduino.h>
 #include <M5CoreInk.h>
+#include <driver/gpio.h>
+#include <esp_sleep.h>
 
 namespace
 {
@@ -20,6 +22,41 @@ bool force_full_clear = true;
 bool manual_full_refresh_requested = false;
 Page last_rendered_page = Page::Dashboard;
 
+void enterLowPowerLightSleep(uint32_t sleep_ms)
+{
+    if (sleep_ms < 1000U)
+    {
+        delay(20);
+        return;
+    }
+
+    digitalWrite(LED_EXT_PIN, LOW);
+    esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
+    esp_sleep_enable_timer_wakeup(static_cast<uint64_t>(sleep_ms) * 1000ULL);
+
+    const gpio_num_t wake_buttons[] = {
+        static_cast<gpio_num_t>(BUTTON_UP_PIN),
+        static_cast<gpio_num_t>(BUTTON_DOWN_PIN),
+        static_cast<gpio_num_t>(BUTTON_MID_PIN),
+        static_cast<gpio_num_t>(BUTTON_PWR_PIN),
+        static_cast<gpio_num_t>(BUTTON_EXT_PIN),
+    };
+    for (gpio_num_t pin : wake_buttons)
+    {
+        gpio_wakeup_enable(pin, GPIO_INTR_LOW_LEVEL);
+    }
+    esp_sleep_enable_gpio_wakeup();
+
+    Serial.printf("LOW POWER light sleep %lu ms\n", static_cast<unsigned long>(sleep_ms));
+    esp_light_sleep_start();
+
+    for (gpio_num_t pin : wake_buttons)
+    {
+        gpio_wakeup_disable(pin);
+    }
+    esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
+}
+
 uint32_t refreshIntervalFor(Page page)
 {
     switch (page)
@@ -31,6 +68,7 @@ uint32_t refreshIntervalFor(Page page)
     case Page::System:
         return app_config::kSystemRefreshMs;
     case Page::Sleep:
+    case Page::LowPowerActive:
     case Page::Alarm:
         return 0;
     case Page::Power:
@@ -186,6 +224,70 @@ void handleButton(ButtonEvent event)
         }
     }
 
+    if (app.page() == Page::Sleep)
+    {
+        switch (event)
+        {
+        case ButtonEvent::Select:
+            if (app.lowPower().settings_focus == 0)
+            {
+                app.cycleLowPowerInterval();
+            }
+            else if (app.lowPower().settings_focus == 1)
+            {
+                app.requestLowPowerMode();
+                force_full_clear = false;
+            }
+            else
+            {
+                app.setPage(Page::Power);
+                force_full_clear = false;
+            }
+            force_render = true;
+            return;
+        case ButtonEvent::Next:
+            app.moveLowPowerSettingsFocus(1);
+            force_render = true;
+            force_full_clear = false;
+            return;
+        case ButtonEvent::Previous:
+            app.moveLowPowerSettingsFocus(-1);
+            force_render = true;
+            force_full_clear = false;
+            return;
+        case ButtonEvent::FastRefresh:
+            app.setPage(Page::Power);
+            force_render = true;
+            force_full_clear = false;
+            return;
+        case ButtonEvent::FullRefresh:
+            handleRefreshButton(event);
+            return;
+        case ButtonEvent::None:
+        default:
+            return;
+        }
+    }
+
+    if (app.page() == Page::LowPowerActive)
+    {
+        if (event == ButtonEvent::Next || event == ButtonEvent::FastRefresh || event == ButtonEvent::Previous)
+        {
+            if (app.isLowPowerArming())
+            {
+                app.cancelLowPowerArming();
+            }
+            app.setPage(Page::Sleep);
+            force_render = true;
+            force_full_clear = false;
+        }
+        else if (event == ButtonEvent::FullRefresh)
+        {
+            handleRefreshButton(event);
+        }
+        return;
+    }
+
     if (app.page() == Page::BeelinkCpuDetail || app.page() == Page::BeelinkMemDetail || app.page() == Page::BeelinkUptimeDetail)
     {
         if (handleRefreshButton(event))
@@ -320,8 +422,80 @@ void setup()
 
 void loop()
 {
+    const Page page_before_button = app.page();
     const ButtonEvent event = buttons.poll();
     handleButton(event);
+
+    // Page transitions take priority over background/alarm work. Push the fully
+    // rebuilt frame immediately so a network transaction or later state-machine
+    // work cannot get ahead of the user's navigation feedback.
+    const bool low_power_page_transition = app.page() != page_before_button &&
+                                           (app.page() == Page::Sleep || app.page() == Page::LowPowerActive);
+    if (low_power_page_transition && force_render)
+    {
+        renderWithAntiGhosting(millis());
+        if (app.page() == Page::LowPowerActive && app.isLowPowerModeActive())
+        {
+            app.noteLowPowerDisplay(millis());
+            app.completeLowPowerActivationAfterDisplay();
+        }
+        return;
+    }
+
+    if (app.isLowPowerArming() && app.page() == Page::LowPowerActive)
+    {
+        const uint32_t now = millis();
+        if (app.updateLowPowerArming(now))
+        {
+            force_render = true;
+            force_full_clear = false;
+        }
+        if (app.lowPowerArmingProgressPercent(now) >= 100U)
+        {
+            app.activateLowPowerMode();
+            force_render = true;
+            force_full_clear = false;
+        }
+    }
+
+    if (app.isLowPowerModeActive() && app.page() == Page::LowPowerActive)
+    {
+        if (force_render)
+        {
+            const uint32_t now = millis();
+            renderWithAntiGhosting(now);
+            app.noteLowPowerDisplay(now);
+            app.completeLowPowerActivationAfterDisplay();
+            delay(20);
+            return;
+        }
+
+        const bool cycle_ran = app.runLowPowerMonitoringCycle();
+        if (cycle_ran)
+        {
+            force_render = true;
+            force_full_clear = false;
+        }
+        if (app.consumeAlarmDisplayChanged())
+        {
+            force_render = true;
+            force_full_clear = true;
+        }
+        const uint32_t now = millis();
+        if (app.lowPowerMinuteDisplayDue(now))
+        {
+            force_render = true;
+            force_full_clear = false;
+        }
+        if (force_render)
+        {
+            renderWithAntiGhosting(now);
+            app.noteLowPowerDisplay(now);
+        }
+        const uint32_t sleep_ms = app.lowPowerSleepDurationMs(millis());
+        enterLowPowerLightSleep(sleep_ms);
+        return;
+    }
 
     if (manual_full_refresh_requested)
     {

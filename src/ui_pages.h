@@ -17,6 +17,7 @@ void renderBeelinkUptimeDetail(const AppState& state);
 void renderBeelinkSpeedTestDetail(const AppState& state);
 void renderSystem(const AppState& state);
 void renderSleep(const AppState& state);
+void renderLowPowerActive(const AppState& state);
 void renderAlarmPage(const AppState& state);
 
 } // namespace ui_pages

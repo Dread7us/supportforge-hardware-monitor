@@ -5,6 +5,7 @@
 #include <HTTPClient.h>
 #include <M5CoreInk.h>
 #include <WiFi.h>
+#include <esp_wifi.h>
 #include <algorithm>
 #include <cstring>
 #include <ctime>
@@ -34,6 +35,13 @@ constexpr int kBatteryForceRefreshThresholdPercent = 5;
 constexpr uint32_t kSpeedTestPollMs = 2000U;
 constexpr uint32_t kSpeedTestAnimMs = 700U;
 constexpr uint32_t kSpeedTestPendingTimeoutMs = 120000U;
+constexpr uint32_t kLowPowerIntervalsMs[] = {60000U, 300000U, 600000U, 1200000U, 1800000U};
+constexpr uint8_t kLowPowerIntervalCount = sizeof(kLowPowerIntervalsMs) / sizeof(kLowPowerIntervalsMs[0]);
+constexpr uint8_t kLowPowerDefaultIntervalIndex = 1;
+constexpr uint32_t kLowPowerWifiConnectTimeoutMs = 15000U;
+constexpr uint32_t kLowPowerMinimumSleepMs = 1000U;
+constexpr uint32_t kLowPowerArmingDurationMs = 5000U;
+constexpr uint8_t kLowPowerArmingStepCount = 5;
 
 bool hasText(const char* value)
 {
@@ -300,6 +308,13 @@ void AppState::serviceBackground()
     const uint32_t now = millis();
     status_.uptime_ms = now;
     status_.free_heap = ESP.getFreeHeap();
+    if (low_power_.active)
+    {
+        readBattery();
+        readTime();
+        last_status_update_ms_ = millis();
+        return;
+    }
     connectWifiIfNeeded();
     configureTimeIfNeeded();
     readBattery();
@@ -319,7 +334,10 @@ void AppState::backgroundTask(void* context)
     AppState* state = static_cast<AppState*>(context);
     while (state)
     {
-        state->serviceBackground();
+        if (!state->isLowPowerTransitionOrActive())
+        {
+            state->serviceBackground();
+        }
         vTaskDelay(pdMS_TO_TICKS(250));
     }
 }
@@ -343,18 +361,23 @@ void AppState::updateChargeAnimation()
 void AppState::nextPage()
 {
     const uint8_t next = (static_cast<uint8_t>(page_) + 1U) % static_cast<uint8_t>(Page::Count);
-    page_ = static_cast<Page>(next);
+    setPage(static_cast<Page>(next));
 }
 
 void AppState::previousPage()
 {
     const uint8_t count = static_cast<uint8_t>(Page::Count);
     const uint8_t current = static_cast<uint8_t>(page_);
-    page_ = static_cast<Page>((current + count - 1U) % count);
+    setPage(static_cast<Page>((current + count - 1U) % count));
 }
 
 void AppState::setPage(Page page)
 {
+    cancelLowPowerArming();
+    if (low_power_.active && page != Page::Alarm && page != Page::LowPowerActive)
+    {
+        exitLowPowerMode();
+    }
     page_ = page;
 }
 
@@ -568,6 +591,223 @@ void AppState::cycleRefreshInterval()
     }
     refresh_interval_ms = kRefreshIntervalsMs[(current_index + 1U) % kRefreshIntervalCount];
     preferences.putUInt("refresh_ms", refresh_interval_ms);
+}
+
+void AppState::requestLowPowerMode()
+{
+    if (low_power_.active)
+    {
+        page_ = Page::LowPowerActive;
+        return;
+    }
+
+    if (low_power_.interval_index >= kLowPowerIntervalCount)
+    {
+        low_power_.interval_index = kLowPowerDefaultIntervalIndex;
+    }
+    low_power_.interval_ms = kLowPowerIntervalsMs[low_power_.interval_index];
+    low_power_.arming = true;
+    low_power_.wifi_shutdown = false;
+    low_power_.arming_started_ms = millis();
+    low_power_.arming_duration_ms = kLowPowerArmingDurationMs;
+    low_power_.arming_progress_step = 0;
+    page_ = Page::LowPowerActive;
+    Serial.printf("LOW POWER arming interval=%lu ms\n", static_cast<unsigned long>(low_power_.interval_ms));
+}
+
+void AppState::cancelLowPowerArming()
+{
+    if (!low_power_.arming)
+    {
+        return;
+    }
+    low_power_.arming = false;
+    low_power_.arming_started_ms = 0;
+    low_power_.arming_progress_step = 0;
+    Serial.println("LOW POWER arming cancelled");
+}
+
+uint8_t AppState::lowPowerArmingProgressPercent(uint32_t now) const
+{
+    if (!low_power_.arming)
+    {
+        return low_power_.active ? 100U : 0U;
+    }
+    const uint32_t elapsed = now - low_power_.arming_started_ms;
+    if (elapsed >= low_power_.arming_duration_ms)
+    {
+        return 100U;
+    }
+    return static_cast<uint8_t>((elapsed * 100U) / low_power_.arming_duration_ms);
+}
+
+bool AppState::updateLowPowerArming(uint32_t now)
+{
+    if (!low_power_.arming)
+    {
+        return false;
+    }
+
+    const uint32_t elapsed = now - low_power_.arming_started_ms;
+    uint8_t step = static_cast<uint8_t>((elapsed * kLowPowerArmingStepCount) / low_power_.arming_duration_ms);
+    if (step > kLowPowerArmingStepCount)
+    {
+        step = kLowPowerArmingStepCount;
+    }
+
+    const bool changed = step != low_power_.arming_progress_step;
+    low_power_.arming_progress_step = step;
+    return changed;
+}
+
+void AppState::activateLowPowerMode()
+{
+    if (!low_power_.active)
+    {
+        low_power_.active = true;
+        low_power_.arming = false;
+        low_power_.wifi_shutdown = false;
+        if (low_power_.interval_index >= kLowPowerIntervalCount)
+        {
+            low_power_.interval_index = kLowPowerDefaultIntervalIndex;
+        }
+        low_power_.interval_ms = kLowPowerIntervalsMs[low_power_.interval_index];
+        low_power_.last_check_ms = basement_.last_attempt_ms;
+        low_power_.next_check_ms = millis();
+        low_power_.last_display_minute_ms = 0;
+        basement_.speedtest.is_running = false;
+        speedtest_completion_pending_ = false;
+        speedtest_display_changed_ = false;
+        charge_anim_display_changed_ = false;
+        Serial.printf("LOW POWER activated interval=%lu ms\n", static_cast<unsigned long>(low_power_.interval_ms));
+    }
+    page_ = Page::LowPowerActive;
+}
+
+void AppState::completeLowPowerActivationAfterDisplay()
+{
+    if (!low_power_.active || low_power_.wifi_shutdown)
+    {
+        return;
+    }
+    pinMode(LED_EXT_PIN, OUTPUT);
+    digitalWrite(LED_EXT_PIN, LOW);
+    shutdownWifiForLowPower();
+    low_power_.wifi_shutdown = true;
+    Serial.println("LOW POWER wifi shutdown after active frame");
+}
+
+void AppState::exitLowPowerMode()
+{
+    if (!low_power_.active)
+    {
+        return;
+    }
+    low_power_.active = false;
+    low_power_.arming = false;
+    low_power_.wifi_shutdown = false;
+    pinMode(LED_EXT_PIN, OUTPUT);
+    digitalWrite(LED_EXT_PIN, HIGH);
+    restoreNormalSchedulesAfterLowPower();
+    connectWifiIfNeeded();
+    readWireless();
+    Serial.println("LOW POWER exited");
+}
+
+void AppState::cycleLowPowerInterval()
+{
+    low_power_.interval_index = static_cast<uint8_t>((low_power_.interval_index + 1U) % kLowPowerIntervalCount);
+    low_power_.interval_ms = kLowPowerIntervalsMs[low_power_.interval_index];
+    const uint32_t now = millis();
+    low_power_.next_check_ms = now + low_power_.interval_ms;
+    low_power_.last_display_minute_ms = 0;
+    Serial.printf("LOW POWER interval=%lu ms\n", static_cast<unsigned long>(low_power_.interval_ms));
+}
+
+void AppState::moveLowPowerSettingsFocus(int8_t direction)
+{
+    constexpr uint8_t kFocusCount = 3;
+    const int next = static_cast<int>(low_power_.settings_focus) + direction;
+    low_power_.settings_focus = static_cast<uint8_t>((next + kFocusCount) % kFocusCount);
+}
+
+uint32_t AppState::lowPowerSleepDurationMs(uint32_t now) const
+{
+    if (!low_power_.active || alarm_.is_alarming)
+    {
+        return 0;
+    }
+    const int32_t until_check = static_cast<int32_t>(low_power_.next_check_ms - now);
+    if (until_check <= 0)
+    {
+        return 0;
+    }
+    const uint32_t minute_refresh_ms = lowPowerMinuteDisplayDue(now) ? 0 : 60000U - ((now - low_power_.last_display_minute_ms) % 60000U);
+    uint32_t sleep_ms = static_cast<uint32_t>(until_check);
+    if (minute_refresh_ms > 0 && minute_refresh_ms < sleep_ms)
+    {
+        sleep_ms = minute_refresh_ms;
+    }
+    return sleep_ms < kLowPowerMinimumSleepMs ? 0 : sleep_ms;
+}
+
+bool AppState::lowPowerMinuteDisplayDue(uint32_t now) const
+{
+    return low_power_.active &&
+           (low_power_.last_display_minute_ms == 0 || (now - low_power_.last_display_minute_ms) >= 60000U);
+}
+
+void AppState::noteLowPowerDisplay(uint32_t now)
+{
+    low_power_.last_display_minute_ms = now;
+}
+
+bool AppState::runLowPowerMonitoringCycle()
+{
+    if (!low_power_.active)
+    {
+        return false;
+    }
+
+    const uint32_t now = millis();
+    if (static_cast<int32_t>(now - low_power_.next_check_ms) < 0)
+    {
+        return false;
+    }
+
+    Serial.println("LOW POWER monitor cycle start");
+    readBattery();
+    readTime();
+
+    if (connectWifiBounded(kLowPowerWifiConnectTimeoutMs))
+    {
+        configureTimeIfNeeded();
+        syncNetworkTimeIfDue(false);
+        readTime();
+        fetchBasementStatusIfDue(true);
+    }
+    else
+    {
+        basement_.last_attempt_ms = millis();
+        basement_.diag_state = basement_.configured ? SupportForgeDiagState::WifiDisconnected : SupportForgeDiagState::NotConfigured;
+        noteBasementFailure(basement_.configured ? "wifi connect timeout" : "endpoint not configured");
+        Serial.println("LOW POWER monitor cycle wifi timeout");
+    }
+
+    readWireless();
+    low_power_.last_check_ms = basement_.last_attempt_ms;
+    low_power_.next_check_ms = millis() + low_power_.interval_ms;
+    low_power_.last_display_minute_ms = 0;
+
+    if (!alarm_.is_alarming)
+    {
+        shutdownWifiForLowPower();
+        low_power_.wifi_shutdown = true;
+    }
+    Serial.printf("LOW POWER monitor cycle done failures=%u alarm=%d\n",
+                  static_cast<unsigned>(basement_.consecutive_failures),
+                  alarm_.is_alarming);
+    return true;
 }
 
 bool AppState::consumeBatteryDisplayChanged()
@@ -823,6 +1063,60 @@ void AppState::connectWifiIfNeeded()
     last_wifi_attempt_ms_ = now;
     WiFi.mode(WIFI_STA);
     WiFi.begin(app_config::kWifiSsid, app_config::kWifiPassword);
+}
+
+bool AppState::connectWifiBounded(uint32_t timeout_ms)
+{
+    status_.wifi_configured = hasText(app_config::kWifiSsid);
+    if (!status_.wifi_configured)
+    {
+        readWireless();
+        return false;
+    }
+    if (WiFi.status() != WL_CONNECTED)
+    {
+        WiFi.mode(WIFI_STA);
+        WiFi.setSleep(false);
+        WiFi.begin(app_config::kWifiSsid, app_config::kWifiPassword);
+        last_wifi_attempt_ms_ = millis();
+    }
+
+    const uint32_t start = millis();
+    while (WiFi.status() != WL_CONNECTED && (millis() - start) < timeout_ms)
+    {
+        delay(100);
+    }
+    readWireless();
+    return WiFi.status() == WL_CONNECTED;
+}
+
+void AppState::shutdownWifiForLowPower()
+{
+    WiFi.disconnect(true);
+    WiFi.mode(WIFI_OFF);
+    esp_wifi_stop();
+    readWireless();
+}
+
+void AppState::restoreNormalSchedulesAfterLowPower()
+{
+    const uint32_t now = millis();
+    last_wifi_attempt_ms_ = 0;
+    last_wifi_scan_ms_ = now;
+    last_time_sync_attempt_ms_ = now;
+    last_battery_read_ms_ = 0;
+    if (basement_.last_attempt_ms != 0)
+    {
+        basement_.last_attempt_ms = now;
+    }
+    if (weather_.last_attempt_ms != 0)
+    {
+        weather_.last_attempt_ms = now;
+    }
+    last_speedtest_poll_ms_ = now;
+    last_speedtest_anim_ms_ = now;
+    charge_anim_display_changed_ = false;
+    speedtest_display_changed_ = false;
 }
 
 void AppState::configureTimeIfNeeded()
