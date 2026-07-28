@@ -699,16 +699,26 @@ void AppState::completeLowPowerActivationAfterDisplay()
 
 void AppState::exitLowPowerMode()
 {
-    if (!low_power_.active)
-    {
-        return;
-    }
+    const bool was_active = low_power_.active;
+    const bool had_wifi_shutdown = low_power_.wifi_shutdown;
     low_power_.active = false;
     low_power_.arming = false;
     low_power_.wifi_shutdown = false;
+    low_power_.next_check_ms = 0;
+    low_power_.last_check_ms = 0;
+    low_power_.last_display_minute_ms = 0;
+    low_power_.arming_started_ms = 0;
+    low_power_.arming_progress_step = 0;
+
+    if (!was_active && !had_wifi_shutdown)
+    {
+        return;
+    }
+
     pinMode(LED_EXT_PIN, OUTPUT);
     digitalWrite(LED_EXT_PIN, HIGH);
     restoreNormalSchedulesAfterLowPower();
+    WiFi.setSleep(false);
     connectWifiIfNeeded();
     readWireless();
     Serial.println("LOW POWER exited");
@@ -795,12 +805,11 @@ bool AppState::runLowPowerMonitoringCycle()
     }
 
     readWireless();
-    low_power_.last_check_ms = basement_.last_attempt_ms;
-    low_power_.next_check_ms = millis() + low_power_.interval_ms;
-    low_power_.last_display_minute_ms = 0;
-
-    if (!alarm_.is_alarming)
+    if (low_power_.active && !alarm_.is_alarming)
     {
+        low_power_.last_check_ms = basement_.last_attempt_ms;
+        low_power_.next_check_ms = millis() + low_power_.interval_ms;
+        low_power_.last_display_minute_ms = 0;
         shutdownWifiForLowPower();
         low_power_.wifi_shutdown = true;
     }
@@ -1740,7 +1749,17 @@ void AppState::triggerAlarm(const char* title, const char* details)
 {
     resetAlarmBuzzerForNewIncident();
 
-    if (page_ != Page::Alarm)
+    const bool escalated_from_low_power = low_power_.active || low_power_.arming || page_ == Page::LowPowerActive;
+    if (escalated_from_low_power)
+    {
+        // An alarm is a terminal transition for the current Low Power session.
+        // Preserve the selected interval, but invalidate every countdown/check
+        // deadline before exposing the alarm page so no obsolete sleep path can
+        // reclaim the display or CPU after escalation.
+        exitLowPowerMode();
+        page_before_alarm_ = Page::Dashboard;
+    }
+    else if (page_ != Page::Alarm)
     {
         page_before_alarm_ = page_;
     }
@@ -1755,7 +1774,10 @@ void AppState::triggerAlarm(const char* title, const char* details)
     basement_.alarm_muted = false;
     setPage(Page::Alarm);
     alarm_display_changed_ = true;
-    Serial.printf("ALARM triggered: %s - %s\n", alarm_.error_title, alarm_.error_details);
+    Serial.printf("ALARM triggered%s: %s - %s\n",
+                  escalated_from_low_power ? "; LOW POWER exited" : "",
+                  alarm_.error_title,
+                  alarm_.error_details);
 }
 
 void AppState::resetAlarmBuzzerForNewIncident()
@@ -1813,7 +1835,8 @@ void AppState::silenceAlarmBuzzer()
 
 void AppState::resetAlarmState()
 {
-    const bool was_showing_alarm = page_ == Page::Alarm;
+    const bool had_alarm_incident = basement_.alarm_active || alarm_.is_alarming || alarm_.is_muted ||
+                                    alarm_.is_dismissed || alarm_.snoozed_until_ms != 0;
     silenceAlarmBuzzer();
 
     // Network recovery marks the end of the current offline incident. Clear
@@ -1830,9 +1853,13 @@ void AppState::resetAlarmState()
 
     basement_.alarm_muted = false;
     basement_.alarm_active = false;
-    if (was_showing_alarm)
+    if (had_alarm_incident)
     {
-        setPage(page_before_alarm_ == Page::Alarm ? Page::Dashboard : page_before_alarm_);
+        // Recovery ends the alarm workflow at the awake Dashboard. In
+        // particular, never restore a pre-alarm Low Power page/session or keep
+        // a page reached after dismiss/snooze once the endpoint has recovered.
+        exitLowPowerMode();
+        setPage(Page::Dashboard);
     }
 }
 

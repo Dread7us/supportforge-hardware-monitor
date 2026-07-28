@@ -476,6 +476,21 @@ void loop()
             force_render = true;
             force_full_clear = false;
         }
+
+        // A threshold alarm terminates Active Low Power inside the monitoring
+        // cycle. Render the existing alarm frame immediately and service its
+        // existing buzzer before any Low Power status refresh or sleep decision
+        // can run against the now-obsolete session.
+        if (app.isAlarmActive() && app.page() == Page::Alarm)
+        {
+            app.consumeAlarmDisplayChanged();
+            force_render = true;
+            force_full_clear = true;
+            renderWithAntiGhosting(millis());
+            app.updateServerAlarm();
+            delay(20);
+            return;
+        }
         if (app.consumeAlarmDisplayChanged())
         {
             force_render = true;
