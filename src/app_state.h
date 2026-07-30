@@ -240,6 +240,7 @@ class AppState
     void dismissAlarm();
     void snoozeAlarm();
     bool isAlarmActive() const { return alarm_.is_alarming; }
+    bool isFailureWarningActive() const { return failure_warning_beep_count_ != 0; }
     bool shouldShowAlarmReminder() const;
     void toggleTempUnit();
     bool hostTempIsF() const { return host_is_f_; }
@@ -293,6 +294,8 @@ class AppState
     void noteBasementFailure(const char* error, int http_code = 0);
     void setBasementOnline();
     void triggerAlarm(const char* title, const char* details);
+    void startFailureWarning(uint8_t beep_count);
+    void clearFailureWarning();
     void resetAlarmBuzzerForNewIncident();
     void playConnectionChime();
     void playMarioCoinChime();
@@ -328,6 +331,9 @@ class AppState
     bool charge_anim_display_changed_ = false;
     bool alarm_display_changed_ = false;
     bool alarm_auto_dismissed_ = false;
+    uint8_t failure_warning_beep_count_ = 0;
+    uint8_t failure_warning_beeps_played_ = 0;
+    uint32_t failure_warning_next_ms_ = 0;
     bool speedtest_display_changed_ = false;
     bool speedtest_was_running_ = false;
     bool speedtest_result_tracking_initialized_ = false;

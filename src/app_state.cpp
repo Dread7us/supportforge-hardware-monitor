@@ -1,6 +1,7 @@
 #include <app_state.h>
 #include <secrets.h>
 #include <app_config.h>
+#include "hardware_control.h"
 #include <ArduinoJson.h>
 #include <HTTPClient.h>
 #include <M5CoreInk.h>
@@ -458,27 +459,53 @@ void AppState::updateServerAlarm()
 {
     M5.Speaker.update();
 
-    if (!alarm_.is_alarming || alarm_.is_muted)
+    if (alarm_.is_alarming)
+    {
+        if (alarm_.is_muted)
+        {
+            return;
+        }
+
+        const uint32_t now = millis();
+        if (alarm_.next_buzzer_ms == 0 || static_cast<int32_t>(now - alarm_.next_buzzer_ms) >= 0)
+        {
+            M5.Speaker.setVolume(2);
+            M5.Speaker.tone(1800, app_config::kAlarmBeepMs);
+            ++alarm_.buzzer_beeps_played;
+            if (alarm_.buzzer_beeps_played >= app_config::kAlarmBeepsPerPattern)
+            {
+                alarm_.buzzer_beeps_played = 0;
+                alarm_.next_buzzer_ms = now + app_config::kAlarmPatternPauseMs;
+            }
+            else
+            {
+                alarm_.next_buzzer_ms = now + app_config::kAlarmBeepMs + app_config::kAlarmBeepGapMs;
+            }
+        }
+        return;
+    }
+
+    if (failure_warning_beep_count_ == 0)
     {
         return;
     }
 
     const uint32_t now = millis();
-    if (alarm_.next_buzzer_ms == 0 || static_cast<int32_t>(now - alarm_.next_buzzer_ms) >= 0)
+    if (static_cast<int32_t>(now - failure_warning_next_ms_) < 0)
     {
-        M5.Speaker.setVolume(2);
-        M5.Speaker.tone(1800, app_config::kAlarmBeepMs);
-        ++alarm_.buzzer_beeps_played;
-        if (alarm_.buzzer_beeps_played >= app_config::kAlarmBeepsPerPattern)
-        {
-            alarm_.buzzer_beeps_played = 0;
-            alarm_.next_buzzer_ms = now + app_config::kAlarmPatternPauseMs;
-        }
-        else
-        {
-            alarm_.next_buzzer_ms = now + app_config::kAlarmBeepMs + app_config::kAlarmBeepGapMs;
-        }
+        return;
     }
+    if (failure_warning_beeps_played_ >= failure_warning_beep_count_)
+    {
+        clearFailureWarning();
+        return;
+    }
+
+    M5.Speaker.setVolume(2);
+    M5.Speaker.tone(1800, app_config::kAlarmBeepMs);
+    ++failure_warning_beeps_played_;
+    failure_warning_next_ms_ = now + app_config::kAlarmBeepMs +
+                               (failure_warning_beeps_played_ < failure_warning_beep_count_ ? app_config::kAlarmBeepGapMs : 0U);
 }
 
 void AppState::muteAlarm()
@@ -505,6 +532,7 @@ void AppState::dismissAlarm()
     alarm_.snoozed_until_ms = 0;
     basement_.alarm_muted = true;
     silenceAlarmBuzzer();
+    setStatusLedEnabled(true);
     setPage(Page::Dashboard);
     Serial.println("BEELINK alarm dismissed");
 }
@@ -521,6 +549,7 @@ void AppState::snoozeAlarm()
     alarm_.snoozed_until_ms = millis() + app_config::kAlarmSnoozeMs;
     basement_.alarm_muted = true;
     silenceAlarmBuzzer();
+    setStatusLedEnabled(true);
     setPage(Page::Dashboard);
     Serial.println("BEELINK alarm snoozed");
 }
@@ -690,8 +719,7 @@ void AppState::completeLowPowerActivationAfterDisplay()
     {
         return;
     }
-    pinMode(LED_EXT_PIN, OUTPUT);
-    digitalWrite(LED_EXT_PIN, LOW);
+    setStatusLedEnabled(false);
     shutdownWifiForLowPower();
     low_power_.wifi_shutdown = true;
     Serial.println("LOW POWER wifi shutdown after active frame");
@@ -715,8 +743,7 @@ void AppState::exitLowPowerMode()
         return;
     }
 
-    pinMode(LED_EXT_PIN, OUTPUT);
-    digitalWrite(LED_EXT_PIN, HIGH);
+    setStatusLedEnabled(true);
     restoreNormalSchedulesAfterLowPower();
     WiFi.setSleep(false);
     connectWifiIfNeeded();
@@ -743,7 +770,7 @@ void AppState::moveLowPowerSettingsFocus(int8_t direction)
 
 uint32_t AppState::lowPowerSleepDurationMs(uint32_t now) const
 {
-    if (!low_power_.active || alarm_.is_alarming)
+    if (!low_power_.active || alarm_.is_alarming || isFailureWarningActive())
     {
         return 0;
     }
@@ -1316,16 +1343,6 @@ void AppState::fetchBasementStatusIfDue(bool force)
         return;
     }
 
-    const bool should_auto_dismiss_alarm = basement_.alarm_active || alarm_.is_alarming || alarm_.is_muted || alarm_.is_dismissed || alarm_.snoozed_until_ms != 0;
-    if (should_auto_dismiss_alarm)
-    {
-        resetAlarmState();
-        basement_.consecutive_failures = 0;
-        alarm_auto_dismissed_ = true;
-        alarm_display_changed_ = true;
-        Serial.println("BEELINK alarm auto-dismissed: HTTP 200 restored");
-    }
-
     StaticJsonDocument<3072> doc;
     doc.clear();
     const DeserializationError err = deserializeJson(doc, payload);
@@ -1726,6 +1743,10 @@ void AppState::noteBasementFailure(const char* error, int http_code)
             triggerAlarm("BEELINK OFFLINE", basement_.error);
         }
     }
+    else
+    {
+        startFailureWarning(basement_.consecutive_failures);
+    }
 }
 
 void AppState::setBasementOnline()
@@ -1734,6 +1755,7 @@ void AppState::setBasementOnline()
     basement_.online = true;
     basement_.diag_state = SupportForgeDiagState::Online;
     basement_.server_status = ServerStatus::Online;
+    clearFailureWarning();
     resetAlarmState();
     basement_.consecutive_failures = 0;
     copyField(basement_.error, sizeof(basement_.error), "");
@@ -1747,7 +1769,9 @@ void AppState::setBasementOnline()
 
 void AppState::triggerAlarm(const char* title, const char* details)
 {
+    clearFailureWarning();
     resetAlarmBuzzerForNewIncident();
+    setStatusLedEnabled(true);
 
     const bool escalated_from_low_power = low_power_.active || low_power_.arming || page_ == Page::LowPowerActive;
     if (escalated_from_low_power)
@@ -1778,6 +1802,38 @@ void AppState::triggerAlarm(const char* title, const char* details)
                   escalated_from_low_power ? "; LOW POWER exited" : "",
                   alarm_.error_title,
                   alarm_.error_details);
+}
+
+void AppState::startFailureWarning(uint8_t beep_count)
+{
+    if (beep_count == 0 || beep_count >= app_config::kBasementAlarmFailureThreshold)
+    {
+        return;
+    }
+
+    M5.Speaker.end();
+    pinMode(SPEAKER_PIN, OUTPUT);
+    digitalWrite(SPEAKER_PIN, LOW);
+    M5.Speaker.begin();
+    M5.Speaker.setVolume(2);
+    failure_warning_beep_count_ = beep_count;
+    failure_warning_beeps_played_ = 0;
+    failure_warning_next_ms_ = 0;
+    Serial.printf("BEELINK failure warning queued: %u beep(s)\n", static_cast<unsigned>(beep_count));
+}
+
+void AppState::clearFailureWarning()
+{
+    if (failure_warning_beep_count_ == 0)
+    {
+        return;
+    }
+    M5.Speaker.end();
+    pinMode(SPEAKER_PIN, OUTPUT);
+    digitalWrite(SPEAKER_PIN, LOW);
+    failure_warning_beep_count_ = 0;
+    failure_warning_beeps_played_ = 0;
+    failure_warning_next_ms_ = 0;
 }
 
 void AppState::resetAlarmBuzzerForNewIncident()
@@ -1855,6 +1911,7 @@ void AppState::resetAlarmState()
     basement_.alarm_active = false;
     if (had_alarm_incident)
     {
+        setStatusLedEnabled(true);
         // Recovery ends the alarm workflow at the awake Dashboard. In
         // particular, never restore a pre-alarm Low Power page/session or keep
         // a page reached after dismiss/snooze once the endpoint has recovered.

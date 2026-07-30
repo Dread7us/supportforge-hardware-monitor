@@ -2,6 +2,7 @@
 #include "app_state.h"
 #include "buttons.h"
 #include "display.h"
+#include "hardware_control.h"
 #include <Arduino.h>
 #include <M5CoreInk.h>
 #include <driver/gpio.h>
@@ -30,7 +31,7 @@ void enterLowPowerLightSleep(uint32_t sleep_ms)
         return;
     }
 
-    digitalWrite(LED_EXT_PIN, LOW);
+    setStatusLedEnabled(false);
     esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
     esp_sleep_enable_timer_wakeup(static_cast<uint64_t>(sleep_ms) * 1000ULL);
 
@@ -392,6 +393,7 @@ void setup()
     delay(100);
 
     M5.begin();
+    setStatusLedEnabled(true);
     if (!M5.M5Ink.isInit())
     {
         Serial.println("M5Ink init failed");
@@ -491,6 +493,7 @@ void loop()
             delay(20);
             return;
         }
+        app.updateServerAlarm();
         if (app.consumeAlarmDisplayChanged())
         {
             force_render = true;

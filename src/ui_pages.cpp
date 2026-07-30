@@ -294,7 +294,7 @@ const char* lowPowerIntervalNumber(uint32_t interval_ms)
     }
 }
 
-void formatLowPowerClock(const DeviceStatus& s, uint32_t event_ms, char* out, size_t out_len)
+void formatLowPowerAge(uint32_t now_ms, uint32_t event_ms, char* out, size_t out_len)
 {
     if (!out || out_len == 0)
     {
@@ -302,21 +302,21 @@ void formatLowPowerClock(const DeviceStatus& s, uint32_t event_ms, char* out, si
     }
     if (event_ms == 0)
     {
-        snprintf(out, out_len, "--:--");
+        snprintf(out, out_len, "--");
         return;
     }
-    const uint32_t age_s = (millis() - event_ms) / 1000U;
+    const uint32_t age_s = (now_ms - event_ms) / 1000U;
     if (age_s < 90U)
     {
-        snprintf(out, out_len, "%s", s.time_text);
+        snprintf(out, out_len, "NOW");
     }
     else if (age_s < 3600U)
     {
-        snprintf(out, out_len, "%lum ago", static_cast<unsigned long>(age_s / 60U));
+        snprintf(out, out_len, "%luM", static_cast<unsigned long>(age_s / 60U));
     }
     else
     {
-        snprintf(out, out_len, "%luh ago", static_cast<unsigned long>(age_s / 3600U));
+        snprintf(out, out_len, "%luH", static_cast<unsigned long>(age_s / 3600U));
     }
 }
 
@@ -1195,24 +1195,29 @@ void renderLowPowerActive(const AppState& state)
     const char* host = b.has_host && b.host[0] ? b.host : app_config::kTargetHostName;
     drawTextCentered(100, 42, host, coreink_gfx::Font::Small, 168);
 
-    coreink_gfx::drawRect(14, 62, 82, 52);
-    drawTextCentered(55, 66, "INTERVAL", coreink_gfx::Font::Small, 74);
+    // The 24x48 interval glyph needs the complete y=77..124 cell. Blank and
+    // redraw both cards first, including their borders, so no later card/status
+    // operation can cross the selected value.
+    coreink_gfx::fillRect(14, 59, 82, 68, false);
+    coreink_gfx::drawRect(14, 59, 82, 68);
+    drawTextCentered(55, 61, "INTERVAL", coreink_gfx::Font::Small, 74);
     const char* interval_num = lowPowerIntervalNumber(lp.interval_ms);
     const int num_width = textWidth(interval_num, coreink_gfx::Font::Large);
     const int interval_x = 55 - ((num_width + 32) / 2);
-    drawTextClipped(interval_x, 74, interval_num, coreink_gfx::Font::Large, 48);
-    drawTextClipped(interval_x + num_width + 4, 91, "MIN", coreink_gfx::Font::Small, 28);
+    drawTextClipped(interval_x, 77, interval_num, coreink_gfx::Font::Large, 48);
+    drawTextClipped(interval_x + num_width + 4, 94, "MIN", coreink_gfx::Font::Small, 28);
 
     const char* state_text = lp.arming ? "READY" : (b.online ? "ONLINE" : (b.alarm_active || b.diag_state == SupportForgeDiagState::NotConfigured ? "UNAVAIL" : "OFFLINE"));
-    coreink_gfx::drawRect(104, 62, 82, 52);
-    drawTextCentered(145, 66, "STATUS", coreink_gfx::Font::Small, 74);
-    coreink_gfx::fillRect(112, 84, 66, 18, true);
-    drawTextCentered(145, 85, state_text, coreink_gfx::Font::Small, 60, true);
-
-    char last[20] = {};
-    formatLowPowerClock(s, lp.last_check_ms, last, sizeof(last));
+    coreink_gfx::fillRect(104, 59, 82, 68, false);
+    coreink_gfx::drawRect(104, 59, 82, 68);
+    drawTextCentered(145, 61, "STATUS", coreink_gfx::Font::Small, 74);
+    coreink_gfx::fillRect(112, 87, 66, 18, true);
+    drawTextCentered(145, 88, state_text, coreink_gfx::Font::Small, 60, true);
 
     const uint32_t now = millis();
+    char last[20] = {};
+    formatLowPowerAge(now, lp.last_check_ms, last, sizeof(last));
+
     char next[20] = {};
     if (lp.arming)
     {
@@ -1225,7 +1230,7 @@ void renderLowPowerActive(const AppState& state)
     else
     {
         const uint32_t remain_s = (lp.next_check_ms - now + 59999U) / 60000U;
-        snprintf(next, sizeof(next), "%lum", static_cast<unsigned long>(remain_s));
+        snprintf(next, sizeof(next), "%luM", static_cast<unsigned long>(remain_s));
     }
 
     char batt[16] = {};
@@ -1234,28 +1239,45 @@ void renderLowPowerActive(const AppState& state)
     {
         snprintf(batt, sizeof(batt), "%d%%", clampPercent(s.battery_percent));
     }
-    labelValueRow(18, 122, 76, "LAST", last);
-    labelValueRow(104, 122, 76, "NEXT", next);
-    drawTextClipped(18, 140, "BAT", coreink_gfx::Font::Small, 40);
+    // Fixed right-aligned value cells fit NOW, all expected 1M..30M values,
+    // and the existing ARMING state. Each complete region is blanked first.
+    coreink_gfx::fillRect(18, 128, 72, 16, false);
+    drawTextClipped(18, 128, "LAST", coreink_gfx::Font::Small, 32);
+    drawTextRightAligned(90, 128, last, coreink_gfx::Font::Small, 32);
+    coreink_gfx::fillRect(96, 128, 84, 16, false);
+    drawTextClipped(96, 128, "NEXT", coreink_gfx::Font::Small, 32);
+    drawTextRightAligned(180, 128, next, coreink_gfx::Font::Small, 48);
+
+    coreink_gfx::fillRect(18, 145, 76, 16, false);
+    drawTextClipped(18, 145, "BAT", coreink_gfx::Font::Small, 32);
     // Blank the complete four-character value region before redrawing so a
     // transition from 100% to fewer digits cannot leave stale e-paper pixels.
-    coreink_gfx::fillRect(62, 140, 32, 16, false);
-    drawTextRightAligned(94, 140, batt, coreink_gfx::Font::Small, 32);
+    coreink_gfx::fillRect(62, 145, 32, 16, false);
+    drawTextRightAligned(94, 145, batt, coreink_gfx::Font::Small, 32);
 
-    char fail[20] = {};
-    snprintf(fail, sizeof(fail), "%u/%u EP%u", static_cast<unsigned>(b.consecutive_failures), static_cast<unsigned>(app_config::kBasementAlarmFailureThreshold), static_cast<unsigned>(b.active_endpoint + 1U));
-    labelValueRow(104, 140, 76, "FAIL", fail);
+    char fail[8] = {};
+    char endpoint[8] = {};
+    snprintf(fail, sizeof(fail), "%u/%u", static_cast<unsigned>(b.consecutive_failures), static_cast<unsigned>(app_config::kBasementAlarmFailureThreshold));
+    snprintf(endpoint, sizeof(endpoint), "EP%u", static_cast<unsigned>(b.active_endpoint + 1U));
+    // The old shared row left only 22px after its 54px label offset. Use fixed
+    // adjacent cells so both the configured failure ratio and endpoint survive.
+    coreink_gfx::fillRect(100, 145, 86, 16, false);
+    drawTextClipped(100, 145, "FAIL", coreink_gfx::Font::Small, 32);
+    drawTextClipped(136, 145, fail, coreink_gfx::Font::Small, 24);
+    drawTextRightAligned(186, 145, endpoint, coreink_gfx::Font::Small, 24);
 
-    coreink_gfx::fillRect(14, 158, 172, 20, false);
+    // Cover the complete prior status and progress area through y=182. This
+    // begins below the value rows, so it cannot erase timing/battery/failure.
+    coreink_gfx::fillRect(14, 162, 172, 21, false);
     if (lp.arming)
     {
-        drawTextCentered(100, 158, "ENTERING LOW POWER", coreink_gfx::Font::Small, 168);
-        progressBar(22, 173, 156, 8, state.lowPowerArmingProgressPercent(now));
+        drawTextCentered(100, 162, "ENTERING LOW POWER", coreink_gfx::Font::Small, 168);
+        progressBar(22, 178, 156, 5, state.lowPowerArmingProgressPercent(now));
     }
     else
     {
-        drawTextCentered(100, 160, lp.active ? "LOW POWER ACTIVE" : "READY", coreink_gfx::Font::Small, 168);
-        progressBar(22, 174, 156, 6, lp.active ? 100 : 0);
+        drawTextCentered(100, 162, lp.active ? "LOW POWER ACTIVE" : "READY", coreink_gfx::Font::Small, 168);
+        progressBar(22, 178, 156, 5, lp.active ? 100 : 0);
     }
 
     footerNav(lp.arming ? "DOWN/PWR cancel" : "PWR/DOWN exit", "");
